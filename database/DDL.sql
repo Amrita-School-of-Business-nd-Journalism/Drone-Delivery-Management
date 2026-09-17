@@ -1,0 +1,3 @@
+-- Drone Delivery Management and Flight Tracking System
+-- DDL Placeholder
+-- The database schema will be provided in Checkpoint 1.
