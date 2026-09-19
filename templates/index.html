@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drone Delivery System</title>
+    <title>Drone Delivery System - Login</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -13,10 +13,12 @@
             <p>Flight Tracking & Delivery Management Portal</p>
         </header>
 
-        <form method="POST" action="#">
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <form id="login-form" novalidate>
             <div class="form-group">
-                <label for="username">Username or Email</label>
-                <input type="text" id="username" name="username" placeholder="Enter your username" required>
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" placeholder="Enter your email" required>
             </div>
             
             <div class="form-group">
@@ -24,7 +26,15 @@
                 <input type="password" id="password" name="password" placeholder="Enter your password" required>
             </div>
 
-            <button type="submit" class="btn-primary">Sign In</button>
+            <div class="form-group">
+                <label for="role">Login As</label>
+                <select id="role" name="role" required>
+                    <option value="CUSTOMER">Customer</option>
+                    <option value="VENDOR">Vendor</option>
+                </select>
+            </div>
+
+            <button type="submit" id="login-btn" class="btn-primary">Sign In</button>
         </form>
 
         <footer style="margin-top: 1.5rem; text-align: center;">
@@ -32,6 +42,6 @@
         </footer>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/login.js') }}"></script>
 </body>
 </html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Dashboard - Drone Delivery</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Customer Portal</h1>
+            <p>Welcome, {{ session.get('first_name', 'Customer') }}!</p>
+        </header>
+
+        <div class="alert-box alert-success">
+            Authenticated as: <strong>CUSTOMER</strong> ({{ session.get('email') }})
+        </div>
+
+        <div style="margin-top: 1.5rem; text-align: center; display: flex; justify-content: space-around; gap: 1rem;">
+            <a href="{{ url_for('profile_page') }}" class="btn-primary" style="display: inline-block; text-decoration: none; background-color: #475569;">My Profile</a>
+            <a href="{{ url_for('logout') }}" class="btn-primary" style="display: inline-block; text-decoration: none;">Logout</a>
+        </div>
+    </div>
+</body>
+</html>

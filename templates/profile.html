@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Profile - Drone Delivery System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container" style="max-width: 520px;">
+        <header>
+            <h1>My Profile</h1>
+            <p>Manage your personal details</p>
+        </header>
+
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <form id="profile-form" novalidate>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="first_name">First Name</label>
+                    <input type="text" id="first_name" name="first_name" maxlength="25" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="last_name">Last Name</label>
+                    <input type="text" id="last_name" name="last_name" maxlength="25" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email Address (Read-Only)</label>
+                <input type="email" id="email" name="email" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+            </div>
+
+            <div class="form-group">
+                <label for="phone_no">Phone Number (10 Digits)</label>
+                <input type="tel" id="phone_no" name="phone_no" maxlength="10" required>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="role">Account Role</label>
+                    <input type="text" id="role" name="role" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+                </div>
+                <div class="form-group">
+                    <label for="created_at">Member Since</label>
+                    <input type="text" id="created_at" name="created_at" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+                </div>
+            </div>
+
+            <button type="submit" id="save-btn" class="btn-primary">Save Changes</button>
+        </form>
+
+        <hr style="margin: 2rem 0; border: 0; border-top: 1px solid #e2e8f0;">
+
+        <div class="danger-zone">
+            <h3 style="color: #991b1b; font-size: 1.05rem; margin-bottom: 0.5rem;">Danger Zone</h3>
+            <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1rem;">Deleting your account is permanent and cannot be undone.</p>
+            <button id="delete-account-btn" class="btn-primary" style="background-color: #dc2626;">Delete Account</button>
+        </div>
+
+        <footer style="margin-top: 1.5rem; text-align: center; display: flex; justify-content: space-between;">
+            <a href="#" id="back-dashboard-btn">&larr; Back to Dashboard</a>
+            <a href="{{ url_for('logout') }}">Logout</a>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/profile.js') }}"></script>
+</body>
+</html>
