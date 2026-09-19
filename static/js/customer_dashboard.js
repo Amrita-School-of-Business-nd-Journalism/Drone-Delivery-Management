@@ -78,13 +78,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (btnNewDelivery) {
         btnNewDelivery.addEventListener('click', () => {
-            alert('New Delivery request functionality will be implemented in subsequent checkpoints.');
+            window.location.href = '/customer/new-delivery';
         });
     }
 
     if (btnTrackDelivery) {
         btnTrackDelivery.addEventListener('click', () => {
-            alert('Package tracking functionality will be implemented in subsequent checkpoints.');
+            window.location.href = '/customer/track';
         });
     }
 
@@ -92,5 +92,5 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function trackDelivery(packageId) {
-    alert(`Tracking functionality for Package #${packageId} will be implemented in subsequent checkpoints.`);
+    window.location.href = `/customer/track?package_id=${packageId}`;
 }

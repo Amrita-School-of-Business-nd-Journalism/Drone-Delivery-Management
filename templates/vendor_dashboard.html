@@ -3,24 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vendor Dashboard - Drone Delivery</title>
+    <title>Vendor Dashboard - Drone Delivery System</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Vendor Portal</h1>
-            <p>Welcome, {{ session.get('first_name', 'Vendor') }}!</p>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('vendor_dashboard') }}" class="active">Dashboard</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <!-- Vendor Info Header -->
+        <header class="welcome-header">
+            <h2><span id="vendor-business-name">Vendor Dashboard</span></h2>
+            <p><strong>Address:</strong> <span id="vendor-business-address">Loading vendor address...</span></p>
         </header>
 
-        <div class="alert-box alert-success">
-            Authenticated as: <strong>VENDOR</strong> ({{ session.get('email') }})
-        </div>
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
 
-        <div style="margin-top: 1.5rem; text-align: center; display: flex; justify-content: space-around; gap: 1rem;">
-            <a href="{{ url_for('profile_page') }}" class="btn-primary" style="display: inline-block; text-decoration: none; background-color: #475569;">My Profile</a>
-            <a href="{{ url_for('logout') }}" class="btn-primary" style="display: inline-block; text-decoration: none;">Logout</a>
-        </div>
-    </div>
+        <!-- Vendor Statistics Grid -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Products / Packages</h3>
+                <p id="stat-total-packages" class="stat-number">0</p>
+            </div>
+            <div class="stat-card">
+                <h3>Available Packages</h3>
+                <p id="stat-available-packages" class="stat-number">0</p>
+            </div>
+            <div class="stat-card">
+                <h3>Dispatched Packages</h3>
+                <p id="stat-dispatched-packages" class="stat-number">0</p>
+            </div>
+        </section>
+
+        <!-- Vendor Package Activity Table -->
+        <section class="recent-deliveries-section">
+            <h3>Products & Package Requests Associated with Your Business</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Package ID</th>
+                            <th>Product ID</th>
+                            <th>Customer Name</th>
+                            <th>Customer Contact</th>
+                            <th>Weight</th>
+                            <th>Priority</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="vendor-packages-body">
+                        <tr>
+                            <td colspan="7" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading package inventory...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/vendor_dashboard.js') }}"></script>
 </body>
 </html>

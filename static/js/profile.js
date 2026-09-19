@@ -4,6 +4,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveBtn = document.getElementById('save-btn');
     const deleteBtn = document.getElementById('delete-account-btn');
     const backDashboardBtn = document.getElementById('back-dashboard-btn');
+    const vendorProfileFields = document.getElementById('vendor-profile-fields');
+    let currentUserRole = '';
 
     function showAlert(message, isSuccess = false) {
         alertBox.textContent = message;
@@ -24,6 +26,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (response.ok && data.success) {
                 const user = data.user;
+                currentUserRole = user.role;
+
                 document.getElementById('first_name').value = user.first_name || '';
                 document.getElementById('last_name').value = user.last_name || '';
                 document.getElementById('email').value = user.email || '';
@@ -31,11 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('role').value = user.role || '';
                 document.getElementById('created_at').value = user.created_at || '';
 
-                if (user.role === 'CUSTOMER') {
-                    backDashboardBtn.href = '/customer/dashboard';
-                } else if (user.role === 'VENDOR') {
+                if (user.role === 'VENDOR') {
+                    vendorProfileFields.style.display = 'block';
+                    document.getElementById('vendor_name').value = user.vendor_name || '';
+                    document.getElementById('vendor_address').value = user.vendor_address || '';
                     backDashboardBtn.href = '/vendor/dashboard';
+                } else if (user.role === 'CUSTOMER') {
+                    vendorProfileFields.style.display = 'none';
+                    backDashboardBtn.href = '/customer/dashboard';
                 } else {
+                    vendorProfileFields.style.display = 'none';
                     backDashboardBtn.href = '/';
                 }
             } else {
@@ -55,6 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const firstName = document.getElementById('first_name').value.trim();
         const lastName = document.getElementById('last_name').value.trim();
         const phoneNo = document.getElementById('phone_no').value.trim();
+        const vendorName = document.getElementById('vendor_name').value.trim();
+        const vendorAddress = document.getElementById('vendor_address').value.trim();
 
         if (!firstName || !lastName || !phoneNo) {
             showAlert('First name, last name, and phone number are required.');
@@ -72,6 +83,33 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        const payload = {
+            first_name: firstName,
+            last_name: lastName,
+            phone_no: phoneNo
+        };
+
+        if (currentUserRole === 'VENDOR') {
+            if (!vendorName) {
+                showAlert('Vendor Business Name is required for vendor profile.');
+                return;
+            }
+            if (vendorName.length > 50) {
+                showAlert('Vendor Business Name must not exceed 50 characters.');
+                return;
+            }
+            if (!vendorAddress) {
+                showAlert('Vendor Address is required for vendor profile.');
+                return;
+            }
+            if (vendorAddress.length > 100) {
+                showAlert('Vendor Address must not exceed 100 characters.');
+                return;
+            }
+            payload.vendor_name = vendorName;
+            payload.vendor_address = vendorAddress;
+        }
+
         saveBtn.disabled = true;
         saveBtn.textContent = 'Saving...';
 
@@ -81,11 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    first_name: firstName,
-                    last_name: lastName,
-                    phone_no: phoneNo
-                })
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();

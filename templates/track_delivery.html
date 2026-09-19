@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Delivery - Drone Delivery System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('customer_dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <header class="welcome-header">
+            <h2>Package Delivery Tracking</h2>
+            <p>Track the status and assignment details of your packages.</p>
+        </header>
+
+        <!-- Package Search Controls -->
+        <section class="quick-actions-section" style="margin-bottom: 2rem;">
+            <h3>Select or Enter Package ID</h3>
+            <form id="track-form" style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 1; min-width: 220px; margin-bottom: 0;">
+                    <label for="package-select">My Packages</label>
+                    <select id="package-select">
+                        <option value="">-- Loading Your Packages --</option>
+                    </select>
+                </div>
+                <div class="form-group" style="width: 150px; margin-bottom: 0;">
+                    <label for="package-id-input">Package ID</label>
+                    <input type="number" id="package-id-input" placeholder="e.g. 1" min="1">
+                </div>
+                <button type="submit" id="track-submit-btn" class="btn-primary" style="width: auto; padding: 0.75rem 1.5rem;">Track Package</button>
+            </form>
+        </section>
+
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <!-- Tracking Results Container -->
+        <div id="tracking-results" style="display: none;">
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+                
+                <!-- Package Summary Card -->
+                <div class="stat-card" style="border-left-color: #2563eb;">
+                    <h3>Package Info</h3>
+                    <p style="font-size: 1.1rem; font-weight: 700; color: #1e293b;">Package #<span id="res-package-id">-</span></p>
+                    <p style="font-size: 0.9rem; color: #475569; margin-top: 0.5rem;">
+                        <strong>Product ID:</strong> <span id="res-product-id">-</span><br>
+                        <strong>Weight:</strong> <span id="res-weight">-</span><br>
+                        <strong>Priority:</strong> <span id="res-priority">-</span><br>
+                        <strong>Vendor:</strong> <span id="res-vendor">-</span><br>
+                        <strong>Package Status:</strong> <span id="res-package-status" class="status-badge badge-pending">-</span>
+                    </p>
+                </div>
+
+                <!-- Mission Info Card -->
+                <div class="stat-card" style="border-left-color: #0284c7;">
+                    <h3>Mission Status</h3>
+                    <p style="font-size: 1.1rem; font-weight: 700; color: #1e293b;">
+                        Status: <span id="res-mission-status" class="status-badge badge-pending">Not available</span>
+                    </p>
+                    <p style="font-size: 0.9rem; color: #475569; margin-top: 0.5rem;">
+                        <strong>Mission ID:</strong> <span id="res-mission-id">Not available</span><br>
+                        <strong>Start Time:</strong> <span id="res-start-time">Not available</span><br>
+                        <strong>End Time:</strong> <span id="res-end-time">Not available</span>
+                    </p>
+                </div>
+
+                <!-- Drone Info Card -->
+                <div class="stat-card" style="border-left-color: #10b981;">
+                    <h3>Drone Assignment</h3>
+                    <p style="font-size: 1.1rem; font-weight: 700; color: #1e293b;">
+                        Drone #<span id="res-drone-id">Not available</span>
+                    </p>
+                    <p style="font-size: 0.9rem; color: #475569; margin-top: 0.5rem;">
+                        <strong>Current Location:</strong> <span id="res-drone-location">Not available</span><br>
+                        <strong>Payload Capacity:</strong> <span id="res-drone-capacity">Not available</span>
+                    </p>
+                </div>
+
+                <!-- Route Info Card -->
+                <div class="stat-card" style="border-left-color: #8b5cf6;">
+                    <h3>Route Details</h3>
+                    <p style="font-size: 1.1rem; font-weight: 700; color: #1e293b;">
+                        Route #<span id="res-route-id">Not available</span>
+                    </p>
+                    <p style="font-size: 0.9rem; color: #475569; margin-top: 0.5rem;">
+                        <strong>Source:</strong> <span id="res-route-source">Not available</span><br>
+                        <strong>Destination:</strong> <span id="res-route-dest">Not available</span><br>
+                        <strong>Distance:</strong> <span id="res-route-distance">Not available</span><br>
+                        <strong>Est. Time:</strong> <span id="res-route-time">Not available</span>
+                    </p>
+                </div>
+
+            </div>
+        </div>
+
+        <footer style="margin-top: 2rem; text-align: center;">
+            <a href="{{ url_for('customer_dashboard') }}">&larr; Back to Dashboard</a>
+        </footer>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/track_delivery.js') }}"></script>
+</body>
+</html>

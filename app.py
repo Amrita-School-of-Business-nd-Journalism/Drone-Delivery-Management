@@ -90,6 +90,23 @@ def customer_dashboard():
     """
     return render_template('customer_dashboard.html')
 
+@app.route('/customer/new-delivery', methods=['GET'])
+@role_required('CUSTOMER')
+def new_delivery_page():
+    """
+    Page for creating a new delivery request.
+    """
+    return render_template('new_delivery.html')
+
+@app.route('/customer/track', methods=['GET'])
+@role_required('CUSTOMER')
+def track_delivery_page():
+    """
+    Page for customer package delivery tracking.
+    """
+    return render_template('track_delivery.html')
+
+@app.route('/vendor', methods=['GET'])
 @app.route('/vendor/dashboard', methods=['GET'])
 @role_required('VENDOR')
 def vendor_dashboard():
@@ -109,10 +126,37 @@ def profile_page():
 # -----------------------------------------------------
 # API Endpoints
 # -----------------------------------------------------
+@app.route('/api/vendors', methods=['GET'])
+@login_required
+def api_get_vendors():
+    """
+    Retrieves existing vendors list from database.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = "SELECT VENDOR_ID, VENDOR_NAME, VENDOR_ADDRESS FROM VENDORS ORDER BY VENDOR_NAME"
+        cursor.execute(query)
+        vendors = cursor.fetchall()
+
+        return jsonify({"success": True, "vendors": vendors}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching vendors: {err}")
+        return jsonify({"success": False, "message": "Database error fetching vendors."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
 @app.route('/api/register', methods=['POST'])
 def api_register():
     """
-    API endpoint to handle user registration.
+    API endpoint to handle user registration. Supports both CUSTOMER and VENDOR roles.
+    For VENDOR, inserts into USERS and VENDORS in a single atomic transaction.
     """
     data = request.get_json()
     if not data:
@@ -124,9 +168,11 @@ def api_register():
     phone_no = (data.get('phone_no') or '').strip()
     password = data.get('password') or ''
     role = (data.get('role') or '').strip().upper()
+    vendor_name = (data.get('vendor_name') or '').strip()
+    vendor_address = (data.get('vendor_address') or '').strip()
 
     if not first_name or not last_name or not email or not phone_no or not password or not role:
-        return jsonify({"success": False, "message": "All fields are required."}), 400
+        return jsonify({"success": False, "message": "All user fields are required."}), 400
 
     if len(first_name) > 25 or len(last_name) > 25:
         return jsonify({"success": False, "message": "First name and last name must not exceed 25 characters."}), 400
@@ -142,6 +188,16 @@ def api_register():
 
     if role not in ['CUSTOMER', 'VENDOR']:
         return jsonify({"success": False, "message": "Role must be CUSTOMER or VENDOR."}), 400
+
+    if role == 'VENDOR':
+        if not vendor_name:
+            return jsonify({"success": False, "message": "Vendor Business Name is required for vendor registration."}), 400
+        if len(vendor_name) > 50:
+            return jsonify({"success": False, "message": "Vendor Business Name must not exceed 50 characters."}), 400
+        if not vendor_address:
+            return jsonify({"success": False, "message": "Vendor Address is required for vendor registration."}), 400
+        if len(vendor_address) > 100:
+            return jsonify({"success": False, "message": "Vendor Address must not exceed 100 characters."}), 400
 
     conn = None
     cursor = None
@@ -164,11 +220,20 @@ def api_register():
 
         password_hash = generate_password_hash(password)
 
-        insert_query = """
+        insert_user_query = """
             INSERT INTO USERS (FIRST_NAME, LAST_NAME, EMAIL, PHONE_NO, PASSWORD_HASH, CREATED_AT, ROLE)
             VALUES (%s, %s, %s, %s, %s, CURDATE(), %s)
         """
-        cursor.execute(insert_query, (first_name, last_name, email, phone_no, password_hash, role))
+        cursor.execute(insert_user_query, (first_name, last_name, email, phone_no, password_hash, role))
+        
+        if role == 'VENDOR':
+            new_user_id = cursor.lastrowid
+            insert_vendor_query = """
+                INSERT INTO VENDORS (VENDOR_ID, VENDOR_NAME, VENDOR_ADDRESS)
+                VALUES (%s, %s, %s)
+            """
+            cursor.execute(insert_vendor_query, (new_user_id, vendor_name, vendor_address))
+
         conn.commit()
 
         return jsonify({"success": True, "message": "User registered successfully!"}), 201
@@ -179,7 +244,7 @@ def api_register():
         if err.errno == 1062:
             return jsonify({"success": False, "message": "Duplicate email or phone number detected."}), 400
         print(f"MySQL Error during registration: {err}")
-        return jsonify({"success": False, "message": "A database error occurred."}), 500
+        return jsonify({"success": False, "message": "A database error occurred during registration."}), 500
 
     except Exception as ex:
         if conn:
@@ -274,12 +339,10 @@ def api_customer_dashboard_data():
 
         cursor = conn.cursor(dictionary=True)
 
-        # 1. Total Packages for this customer
         query_total_pkgs = "SELECT COUNT(*) AS total FROM PACKAGES WHERE USER_ID = %s"
         cursor.execute(query_total_pkgs, (user_id,))
         total_packages = cursor.fetchone()['total']
 
-        # 2. Ongoing Deliveries for this customer
         query_ongoing = """
             SELECT COUNT(*) AS total 
             FROM MISSIONS m 
@@ -289,7 +352,6 @@ def api_customer_dashboard_data():
         cursor.execute(query_ongoing, (user_id,))
         ongoing_deliveries = cursor.fetchone()['total']
 
-        # 3. Completed Deliveries for this customer
         query_completed = """
             SELECT COUNT(*) AS total 
             FROM MISSIONS m 
@@ -299,7 +361,6 @@ def api_customer_dashboard_data():
         cursor.execute(query_completed, (user_id,))
         completed_deliveries = cursor.fetchone()['total']
 
-        # 4. Recent Deliveries List for this customer
         query_recent = """
             SELECT 
                 p.PACKAGE_ID,
@@ -341,13 +402,279 @@ def api_customer_dashboard_data():
     finally:
         close_db_connection(conn, cursor)
 
+@app.route('/api/customer/my-packages', methods=['GET'])
+@role_required('CUSTOMER')
+def api_customer_my_packages():
+    """
+    Returns list of package IDs and product IDs belonging exclusively to the logged-in customer.
+    """
+    user_id = session.get('user_id')
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = "SELECT PACKAGE_ID, PRODUCT_ID FROM PACKAGES WHERE USER_ID = %s ORDER BY PACKAGE_ID DESC"
+        cursor.execute(query, (user_id,))
+        packages = cursor.fetchall()
+
+        return jsonify({"success": True, "packages": packages}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching customer packages: {err}")
+        return jsonify({"success": False, "message": "Database error fetching package list."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/customer/track/<int:package_id>', methods=['GET'])
+@role_required('CUSTOMER')
+def api_track_package(package_id):
+    """
+    Returns detailed package, mission, drone, and route tracking details ONLY if the package belongs to the logged-in customer.
+    """
+    user_id = session.get('user_id')
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+            SELECT 
+                p.PACKAGE_ID,
+                p.PRODUCT_ID,
+                p.WEIGHT,
+                p.PRIORITY,
+                p.STATUS AS PACKAGE_STATUS,
+                COALESCE(v.VENDOR_NAME, 'Not available') AS VENDOR_NAME,
+                m.MISSION_ID,
+                COALESCE(m.MISSION_STATUS, 'Not available') AS MISSION_STATUS,
+                m.START_TIME,
+                m.END_TIME,
+                d.DRONE_ID,
+                COALESCE(d.CURR_LOCATION, 'Not available') AS DRONE_LOCATION,
+                d.PAYLOAD_CAP AS DRONE_PAYLOAD_CAP,
+                r.ROUTE_ID,
+                COALESCE(r.SOURCE, 'Not available') AS SOURCE,
+                COALESCE(r.DESTINATION, 'Not available') AS DESTINATION,
+                r.DISTANCE,
+                r.ESTIMATED_TIME
+            FROM PACKAGES p
+            LEFT JOIN VENDORS v ON p.VENDOR_ID = v.VENDOR_ID
+            LEFT JOIN MISSIONS m ON p.PACKAGE_ID = m.PACKAGE_ID
+            LEFT JOIN DRONES d ON m.DRONE_ID = d.DRONE_ID
+            LEFT JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            WHERE p.PACKAGE_ID = %s AND p.USER_ID = %s
+        """
+        cursor.execute(query, (package_id, user_id))
+        row = cursor.fetchone()
+
+        if not row:
+            return jsonify({"success": False, "message": "Package not found or access denied."}), 404
+
+        package_details = {
+            "package_id": row['PACKAGE_ID'],
+            "product_id": row['PRODUCT_ID'],
+            "weight": row['WEIGHT'],
+            "priority": row['PRIORITY'],
+            "package_status": row['PACKAGE_STATUS'] or 'AVAILABLE',
+            "vendor_name": row['VENDOR_NAME'],
+            "mission_id": row['MISSION_ID'] if row['MISSION_ID'] else 'Not available',
+            "mission_status": row['MISSION_STATUS'],
+            "start_time": str(row['START_TIME']) if row['START_TIME'] else 'Not available',
+            "end_time": str(row['END_TIME']) if row['END_TIME'] else 'Not available',
+            "drone_id": row['DRONE_ID'] if row['DRONE_ID'] else 'Not available',
+            "drone_location": row['DRONE_LOCATION'],
+            "drone_payload_cap": row['DRONE_PAYLOAD_CAP'] if row['DRONE_PAYLOAD_CAP'] is not None else 'Not available',
+            "route_id": row['ROUTE_ID'] if row['ROUTE_ID'] else 'Not available',
+            "source": row['SOURCE'],
+            "destination": row['DESTINATION'],
+            "distance": str(row['DISTANCE']) if row['DISTANCE'] is not None else 'Not available',
+            "estimated_time": row['ESTIMATED_TIME'] if row['ESTIMATED_TIME'] is not None else 'Not available'
+        }
+
+        return jsonify({"success": True, "package": package_details}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error tracking package: {err}")
+        return jsonify({"success": False, "message": "Database error tracking package."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/customer/packages', methods=['POST'])
+@role_required('CUSTOMER')
+def api_create_package():
+    """
+    API Endpoint allowing the logged-in customer to create a package delivery request.
+    """
+    user_id = session.get('user_id')
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    try:
+        vendor_id = int(data.get('vendor_id'))
+        product_id = int(data.get('product_id'))
+        weight = int(data.get('weight'))
+        priority = int(data.get('priority'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Vendor ID, Product ID, Weight, and Priority must be valid integers."}), 400
+
+    if vendor_id <= 0 or product_id <= 0 or weight <= 0 or priority <= 0:
+        return jsonify({"success": False, "message": "Vendor ID, Product ID, Weight, and Priority must be positive values."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        vendor_query = "SELECT VENDOR_ID FROM VENDORS WHERE VENDOR_ID = %s"
+        cursor.execute(vendor_query, (vendor_id,))
+        if not cursor.fetchone():
+            return jsonify({"success": False, "message": "Selected vendor does not exist."}), 400
+
+        id_query = "SELECT COALESCE(MAX(PACKAGE_ID), 0) + 1 AS next_id FROM PACKAGES"
+        cursor.execute(id_query)
+        next_package_id = cursor.fetchone()['next_id']
+
+        insert_query = """
+            INSERT INTO PACKAGES (PACKAGE_ID, USER_ID, VENDOR_ID, PRODUCT_ID, WEIGHT, PRIORITY, STATUS)
+            VALUES (%s, %s, %s, %s, %s, %s, 'AVAILABLE')
+        """
+        cursor.execute(insert_query, (next_package_id, user_id, vendor_id, product_id, weight, priority))
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Package delivery request created successfully!",
+            "package_id": next_package_id
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": "Product ID is already registered for this Vendor."}), 400
+        if err.errno == 1452:
+            return jsonify({"success": False, "message": "Referenced Vendor or User does not exist."}), 400
+        print(f"MySQL Error creating package: {err}")
+        return jsonify({"success": False, "message": "Database error creating delivery request."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/vendor/dashboard-data', methods=['GET'])
+@role_required('VENDOR')
+def api_vendor_dashboard_data():
+    """
+    Returns profile information, package statistics, and package inventory exclusively for the logged-in vendor.
+    """
+    vendor_user_id = session.get('user_id')
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        vendor_query = """
+            SELECT 
+                v.VENDOR_ID,
+                v.VENDOR_NAME,
+                v.VENDOR_ADDRESS,
+                u.FIRST_NAME,
+                u.LAST_NAME,
+                u.EMAIL,
+                u.PHONE_NO
+            FROM USERS u
+            LEFT JOIN VENDORS v ON u.USER_ID = v.VENDOR_ID
+            WHERE u.USER_ID = %s AND u.ROLE = 'VENDOR'
+        """
+        cursor.execute(vendor_query, (vendor_user_id,))
+        vendor_info = cursor.fetchone()
+
+        if not vendor_info:
+            return jsonify({"success": False, "message": "Vendor account record not found."}), 404
+
+        vendor_data = {
+            "vendor_id": vendor_info['VENDOR_ID'] or vendor_user_id,
+            "vendor_name": vendor_info['VENDOR_NAME'] or f"{vendor_info['FIRST_NAME']} {vendor_info['LAST_NAME']} Store",
+            "vendor_address": vendor_info['VENDOR_ADDRESS'] or "Not specified",
+            "contact_name": f"{vendor_info['FIRST_NAME']} {vendor_info['LAST_NAME']}",
+            "email": vendor_info['EMAIL'],
+            "phone_no": vendor_info['PHONE_NO']
+        }
+
+        query_total = "SELECT COUNT(*) AS total FROM PACKAGES WHERE VENDOR_ID = %s"
+        cursor.execute(query_total, (vendor_user_id,))
+        total_packages = cursor.fetchone()['total']
+
+        query_available = "SELECT COUNT(*) AS total FROM PACKAGES WHERE VENDOR_ID = %s AND STATUS = 'AVAILABLE'"
+        cursor.execute(query_available, (vendor_user_id,))
+        available_packages = cursor.fetchone()['total']
+
+        query_dispatched = "SELECT COUNT(*) AS total FROM PACKAGES WHERE VENDOR_ID = %s AND STATUS != 'AVAILABLE'"
+        cursor.execute(query_dispatched, (vendor_user_id,))
+        dispatched_packages = cursor.fetchone()['total']
+
+        packages_query = """
+            SELECT 
+                p.PACKAGE_ID,
+                p.PRODUCT_ID,
+                p.WEIGHT,
+                p.PRIORITY,
+                p.STATUS,
+                CONCAT(u.FIRST_NAME, ' ', u.LAST_NAME) AS CUSTOMER_NAME,
+                u.EMAIL AS CUSTOMER_EMAIL
+            FROM PACKAGES p
+            JOIN USERS u ON p.USER_ID = u.USER_ID
+            WHERE p.VENDOR_ID = %s
+            ORDER BY p.PACKAGE_ID DESC
+            LIMIT 20
+        """
+        cursor.execute(packages_query, (vendor_user_id,))
+        vendor_packages = cursor.fetchall()
+
+        return jsonify({
+            "success": True,
+            "vendor": vendor_data,
+            "stats": {
+                "total_packages": total_packages,
+                "available_packages": available_packages,
+                "dispatched_packages": dispatched_packages
+            },
+            "packages": vendor_packages
+        }), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error in vendor dashboard API: {err}")
+        return jsonify({"success": False, "message": "Database error retrieving vendor dashboard data."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
 @app.route('/api/profile', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def api_profile():
     """
     API endpoint for viewing, updating, and deleting the logged-in user's profile.
+    Supports vendor business info (VENDOR_NAME, VENDOR_ADDRESS) when role is VENDOR.
     """
     user_id = session.get('user_id')
+    user_role = session.get('role')
     conn = None
     cursor = None
 
@@ -379,6 +706,18 @@ def api_profile():
                 "created_at": user.get('created_at', '')
             }
 
+            # Retrieve VENDOR profile fields if logged-in user is a VENDOR
+            if user['ROLE'] == 'VENDOR':
+                vendor_query = "SELECT VENDOR_NAME, VENDOR_ADDRESS FROM VENDORS WHERE VENDOR_ID = %s"
+                cursor.execute(vendor_query, (user_id,))
+                vendor = cursor.fetchone()
+                if vendor:
+                    user_data["vendor_name"] = vendor['VENDOR_NAME']
+                    user_data["vendor_address"] = vendor['VENDOR_ADDRESS']
+                else:
+                    user_data["vendor_name"] = ""
+                    user_data["vendor_address"] = ""
+
             return jsonify({"success": True, "user": user_data}), 200
 
         except MySQLError as err:
@@ -395,6 +734,8 @@ def api_profile():
         first_name = (data.get('first_name') or '').strip()
         last_name = (data.get('last_name') or '').strip()
         phone_no = (data.get('phone_no') or '').strip()
+        vendor_name = (data.get('vendor_name') or '').strip()
+        vendor_address = (data.get('vendor_address') or '').strip()
 
         if not first_name or not last_name or not phone_no:
             return jsonify({"success": False, "message": "First name, last name, and phone number are required."}), 400
@@ -404,6 +745,17 @@ def api_profile():
 
         if not PHONE_REGEX.match(phone_no):
             return jsonify({"success": False, "message": "Phone number must be exactly 10 digits."}), 400
+
+        # Vendor specific validations
+        if user_role == 'VENDOR':
+            if not vendor_name:
+                return jsonify({"success": False, "message": "Vendor Business Name is required."}), 400
+            if len(vendor_name) > 50:
+                return jsonify({"success": False, "message": "Vendor Business Name must not exceed 50 characters."}), 400
+            if not vendor_address:
+                return jsonify({"success": False, "message": "Vendor Business Address is required."}), 400
+            if len(vendor_address) > 100:
+                return jsonify({"success": False, "message": "Vendor Business Address must not exceed 100 characters."}), 400
 
         try:
             conn = get_db_connection(use_database=True)
@@ -417,12 +769,24 @@ def api_profile():
             if cursor.fetchone():
                 return jsonify({"success": False, "message": "Phone number is already in use by another account."}), 400
 
-            update_query = """
+            # Step 1: Update USERS table
+            update_user_query = """
                 UPDATE USERS 
                 SET FIRST_NAME = %s, LAST_NAME = %s, PHONE_NO = %s 
                 WHERE USER_ID = %s
             """
-            cursor.execute(update_query, (first_name, last_name, phone_no, user_id))
+            cursor.execute(update_user_query, (first_name, last_name, phone_no, user_id))
+
+            # Step 2: Update VENDORS table if user is a VENDOR (Single Transaction)
+            if user_role == 'VENDOR':
+                update_vendor_query = """
+                    UPDATE VENDORS
+                    SET VENDOR_NAME = %s, VENDOR_ADDRESS = %s
+                    WHERE VENDOR_ID = %s
+                """
+                cursor.execute(update_vendor_query, (vendor_name, vendor_address, user_id))
+
+            # Commit atomic transaction
             conn.commit()
 
             session['first_name'] = first_name
@@ -435,7 +799,7 @@ def api_profile():
             if err.errno == 1062:
                 return jsonify({"success": False, "message": "Phone number is already registered."}), 400
             print(f"MySQL Error updating profile: {err}")
-            return jsonify({"success": False, "message": "A database error occurred."}), 500
+            return jsonify({"success": False, "message": "A database error occurred during profile update."}), 500
 
         finally:
             close_db_connection(conn, cursor)
@@ -448,10 +812,15 @@ def api_profile():
 
             cursor = conn.cursor()
 
-            delete_query = "DELETE FROM USERS WHERE USER_ID = %s"
-            cursor.execute(delete_query, (user_id,))
-            conn.commit()
+            # Transactional deletion for vendor and user
+            if user_role == 'VENDOR':
+                delete_vendor_query = "DELETE FROM VENDORS WHERE VENDOR_ID = %s"
+                cursor.execute(delete_vendor_query, (user_id,))
 
+            delete_user_query = "DELETE FROM USERS WHERE USER_ID = %s"
+            cursor.execute(delete_user_query, (user_id,))
+            
+            conn.commit()
             session.clear()
 
             return jsonify({"success": True, "message": "Account deleted successfully.", "redirect_url": url_for('home')}), 200
@@ -459,6 +828,8 @@ def api_profile():
         except MySQLError as err:
             if conn:
                 conn.rollback()
+            if err.errno == 1451:
+                return jsonify({"success": False, "message": "Cannot delete vendor account while associated packages exist."}), 400
             print(f"MySQL Error deleting account: {err}")
             return jsonify({"success": False, "message": "A database error occurred while deleting account."}), 500
 

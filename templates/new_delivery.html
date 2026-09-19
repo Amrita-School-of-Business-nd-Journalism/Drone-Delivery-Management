@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Delivery Request - Drone Delivery System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('customer_dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container" style="max-width: 540px; margin-top: 2rem;">
+        <header>
+            <h1>Request New Delivery</h1>
+            <p>Create a package delivery request</p>
+        </header>
+
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <form id="new-delivery-form" novalidate>
+            <div class="form-group">
+                <label for="vendor_id">Select Vendor</label>
+                <select id="vendor_id" name="vendor_id" required>
+                    <option value="">-- Loading Vendors... --</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="product_id">Product ID</label>
+                <input type="number" id="product_id" name="product_id" min="1" placeholder="Enter Product ID (e.g. 101)" required>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="weight">Weight (kg)</label>
+                    <input type="number" id="weight" name="weight" min="1" placeholder="Weight in kg" required>
+                </div>
+                <div class="form-group">
+                    <label for="priority">Priority Level</label>
+                    <select id="priority" name="priority" required>
+                        <option value="1">1 - Standard</option>
+                        <option value="2">2 - Medium</option>
+                        <option value="3">3 - High</option>
+                        <option value="4">4 - Express</option>
+                        <option value="5">5 - Urgent</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="submit" id="submit-package-btn" class="btn-primary">Create Delivery Request</button>
+        </form>
+
+        <footer style="margin-top: 1.5rem; text-align: center;">
+            <a href="{{ url_for('customer_dashboard') }}">&larr; Back to Dashboard</a>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/new_delivery.js') }}"></script>
+</body>
+</html>
