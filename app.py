@@ -81,6 +81,7 @@ def register_page():
             return redirect(url_for('vendor_dashboard'))
     return render_template('register.html')
 
+@app.route('/customer', methods=['GET'])
 @app.route('/customer/dashboard', methods=['GET'])
 @role_required('CUSTOMER')
 def customer_dashboard():
@@ -257,6 +258,89 @@ def api_login():
     finally:
         close_db_connection(conn, cursor)
 
+@app.route('/api/customer/dashboard-data', methods=['GET'])
+@role_required('CUSTOMER')
+def api_customer_dashboard_data():
+    """
+    Returns statistics and recent deliveries specifically for the logged-in customer.
+    """
+    user_id = session.get('user_id')
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        # 1. Total Packages for this customer
+        query_total_pkgs = "SELECT COUNT(*) AS total FROM PACKAGES WHERE USER_ID = %s"
+        cursor.execute(query_total_pkgs, (user_id,))
+        total_packages = cursor.fetchone()['total']
+
+        # 2. Ongoing Deliveries for this customer
+        query_ongoing = """
+            SELECT COUNT(*) AS total 
+            FROM MISSIONS m 
+            JOIN PACKAGES p ON m.PACKAGE_ID = p.PACKAGE_ID 
+            WHERE p.USER_ID = %s AND m.MISSION_STATUS = 'ONGOING'
+        """
+        cursor.execute(query_ongoing, (user_id,))
+        ongoing_deliveries = cursor.fetchone()['total']
+
+        # 3. Completed Deliveries for this customer
+        query_completed = """
+            SELECT COUNT(*) AS total 
+            FROM MISSIONS m 
+            JOIN PACKAGES p ON m.PACKAGE_ID = p.PACKAGE_ID 
+            WHERE p.USER_ID = %s AND m.MISSION_STATUS = 'OVER'
+        """
+        cursor.execute(query_completed, (user_id,))
+        completed_deliveries = cursor.fetchone()['total']
+
+        # 4. Recent Deliveries List for this customer
+        query_recent = """
+            SELECT 
+                p.PACKAGE_ID,
+                p.PRODUCT_ID,
+                COALESCE(v.VENDOR_NAME, 'N/A') AS VENDOR_NAME,
+                p.WEIGHT,
+                p.PRIORITY,
+                p.STATUS AS PACKAGE_STATUS,
+                m.MISSION_ID,
+                COALESCE(m.MISSION_STATUS, 'PENDING') AS MISSION_STATUS,
+                COALESCE(r.SOURCE, 'N/A') AS SOURCE,
+                COALESCE(r.DESTINATION, 'N/A') AS DESTINATION
+            FROM PACKAGES p
+            LEFT JOIN VENDORS v ON p.VENDOR_ID = v.VENDOR_ID
+            LEFT JOIN MISSIONS m ON p.PACKAGE_ID = m.PACKAGE_ID
+            LEFT JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            WHERE p.USER_ID = %s
+            ORDER BY p.PACKAGE_ID DESC
+            LIMIT 5
+        """
+        cursor.execute(query_recent, (user_id,))
+        recent_deliveries = cursor.fetchall()
+
+        return jsonify({
+            "success": True,
+            "first_name": session.get('first_name', 'Customer'),
+            "stats": {
+                "total_packages": total_packages,
+                "ongoing_deliveries": ongoing_deliveries,
+                "completed_deliveries": completed_deliveries
+            },
+            "recent_deliveries": recent_deliveries
+        }), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error in customer dashboard API: {err}")
+        return jsonify({"success": False, "message": "Database error retrieving dashboard data."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
 @app.route('/api/profile', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def api_profile():
@@ -282,7 +366,6 @@ def api_profile():
                 session.clear()
                 return jsonify({"success": False, "message": "User record not found."}), 404
 
-            # Format created_at date for JSON output
             if user.get('CREATED_AT'):
                 user['created_at'] = str(user['CREATED_AT'])
             
@@ -329,13 +412,11 @@ def api_profile():
 
             cursor = conn.cursor(dictionary=True)
 
-            # Check if phone number is already taken by another user
             check_query = "SELECT USER_ID FROM USERS WHERE PHONE_NO = %s AND USER_ID != %s"
             cursor.execute(check_query, (phone_no, user_id))
             if cursor.fetchone():
                 return jsonify({"success": False, "message": "Phone number is already in use by another account."}), 400
 
-            # Parameterized update
             update_query = """
                 UPDATE USERS 
                 SET FIRST_NAME = %s, LAST_NAME = %s, PHONE_NO = %s 
@@ -344,7 +425,6 @@ def api_profile():
             cursor.execute(update_query, (first_name, last_name, phone_no, user_id))
             conn.commit()
 
-            # Update session
             session['first_name'] = first_name
 
             return jsonify({"success": True, "message": "Profile updated successfully!"}), 200
@@ -368,12 +448,10 @@ def api_profile():
 
             cursor = conn.cursor()
 
-            # Parameterized account deletion
             delete_query = "DELETE FROM USERS WHERE USER_ID = %s"
             cursor.execute(delete_query, (user_id,))
             conn.commit()
 
-            # Clear session
             session.clear()
 
             return jsonify({"success": True, "message": "Account deleted successfully.", "redirect_url": url_for('home')}), 200

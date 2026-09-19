@@ -7,20 +7,78 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Customer Portal</h1>
-            <p>Welcome, {{ session.get('first_name', 'Customer') }}!</p>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('customer_dashboard') }}" class="active">Dashboard</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <header class="welcome-header">
+            <h2>Welcome, <span id="customer-name">Customer</span>!</h2>
+            <p>Overview of your packages and delivery activity.</p>
         </header>
 
-        <div class="alert-box alert-success">
-            Authenticated as: <strong>CUSTOMER</strong> ({{ session.get('email') }})
-        </div>
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
 
-        <div style="margin-top: 1.5rem; text-align: center; display: flex; justify-content: space-around; gap: 1rem;">
-            <a href="{{ url_for('profile_page') }}" class="btn-primary" style="display: inline-block; text-decoration: none; background-color: #475569;">My Profile</a>
-            <a href="{{ url_for('logout') }}" class="btn-primary" style="display: inline-block; text-decoration: none;">Logout</a>
-        </div>
-    </div>
+        <!-- Statistics Cards Grid -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Packages</h3>
+                <p id="stat-total-packages" class="stat-number">0</p>
+            </div>
+            <div class="stat-card">
+                <h3>Ongoing Deliveries</h3>
+                <p id="stat-ongoing-deliveries" class="stat-number">0</p>
+            </div>
+            <div class="stat-card">
+                <h3>Completed Deliveries</h3>
+                <p id="stat-completed-deliveries" class="stat-number">0</p>
+            </div>
+        </section>
+
+        <!-- Quick Actions -->
+        <section class="quick-actions-section">
+            <h3>Quick Actions</h3>
+            <div class="actions-buttons">
+                <button id="action-new-delivery" class="btn-action">+ New Delivery</button>
+                <button id="action-track-delivery" class="btn-action">Track Delivery</button>
+                <a href="{{ url_for('profile_page') }}" class="btn-action btn-secondary-action">My Profile</a>
+            </div>
+        </section>
+
+        <!-- Recent Deliveries Table -->
+        <section class="recent-deliveries-section">
+            <h3>Recent Deliveries</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Package ID</th>
+                            <th>Vendor</th>
+                            <th>Weight</th>
+                            <th>Route</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-deliveries-body">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #64748b; padding: 1rem;">
+                                Loading deliveries data...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/customer_dashboard.js') }}"></script>
 </body>
 </html>
