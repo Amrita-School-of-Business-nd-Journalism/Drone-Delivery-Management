@@ -115,6 +115,14 @@ def vendor_dashboard():
     """
     return render_template('vendor_dashboard.html')
 
+@app.route('/vendor/missions', methods=['GET'])
+@role_required('VENDOR')
+def vendor_missions_page():
+    """
+    Page for Vendor Mission Management.
+    """
+    return render_template('missions.html')
+
 @app.route('/profile', methods=['GET'])
 @login_required
 def profile_page():
@@ -845,6 +853,511 @@ def logout():
     if request.is_json or request.path.startswith('/api/'):
         return jsonify({"success": True, "message": "Logged out successfully.", "redirect_url": url_for('home')}), 200
     return redirect(url_for('home'))
+
+# -----------------------------------------------------
+# Mission Management API Endpoints
+# -----------------------------------------------------
+@app.route('/api/missions/options', methods=['GET'])
+@role_required('VENDOR')
+def api_get_mission_options():
+    """
+    Returns available drones, pilots, packages, and routes for creating/updating missions.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT DRONE_ID, PAYLOAD_CAP, CURR_LOCATION FROM DRONES ORDER BY DRONE_ID")
+        drones = cursor.fetchall()
+
+        cursor.execute("SELECT PILOT_ID, PILOT_NAME, LICENSE_NUMBER, PHONE_NO, STATUS FROM PILOTS ORDER BY PILOT_NAME")
+        pilots = cursor.fetchall()
+
+        cursor.execute("SELECT PACKAGE_ID, PRODUCT_ID, USER_ID, WEIGHT, PRIORITY, STATUS FROM PACKAGES ORDER BY PACKAGE_ID DESC")
+        packages = cursor.fetchall()
+
+        cursor.execute("SELECT ROUTE_ID, SOURCE, DESTINATION, DISTANCE, ESTIMATED_TIME FROM ROUTES ORDER BY ROUTE_ID")
+        routes = cursor.fetchall()
+
+        return jsonify({
+            "success": True,
+            "drones": drones,
+            "pilots": pilots,
+            "packages": packages,
+            "routes": routes
+        }), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching mission options: {err}")
+        return jsonify({"success": False, "message": "Database error fetching mission options."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions', methods=['GET'])
+@role_required('VENDOR')
+def api_get_missions():
+    """
+    Returns list of all missions with details from joined tables.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+            SELECT 
+                m.MISSION_ID,
+                m.DRONE_ID,
+                m.PILOT_ID,
+                p_pilot.PILOT_NAME,
+                p_pilot.STATUS AS PILOT_STATUS,
+                m.PACKAGE_ID,
+                m.ROUTE_ID,
+                r.SOURCE,
+                r.DESTINATION,
+                m.MISSION_STATUS,
+                m.START_TIME,
+                m.END_TIME
+            FROM MISSIONS m
+            LEFT JOIN PILOTS p_pilot ON m.PILOT_ID = p_pilot.PILOT_ID
+            LEFT JOIN DRONES d ON m.DRONE_ID = d.DRONE_ID
+            LEFT JOIN PACKAGES p ON m.PACKAGE_ID = p.PACKAGE_ID
+            LEFT JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            ORDER BY m.MISSION_ID DESC
+        """
+        cursor.execute(query)
+        missions = cursor.fetchall()
+
+        for m in missions:
+            m['START_TIME'] = str(m['START_TIME']) if m.get('START_TIME') else None
+            m['END_TIME'] = str(m['END_TIME']) if m.get('END_TIME') else None
+
+        return jsonify({"success": True, "missions": missions}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching missions: {err}")
+        return jsonify({"success": False, "message": "Database error fetching missions."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions/<int:mission_id>', methods=['GET'])
+@role_required('VENDOR')
+def api_get_mission(mission_id):
+    """
+    Returns detailed mission object for a specific mission_id.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT 
+                m.MISSION_ID,
+                m.DRONE_ID,
+                m.PILOT_ID,
+                p_pilot.PILOT_NAME,
+                p_pilot.STATUS AS PILOT_STATUS,
+                m.PACKAGE_ID,
+                m.ROUTE_ID,
+                r.SOURCE,
+                r.DESTINATION,
+                m.MISSION_STATUS,
+                m.START_TIME,
+                m.END_TIME
+            FROM MISSIONS m
+            LEFT JOIN PILOTS p_pilot ON m.PILOT_ID = p_pilot.PILOT_ID
+            LEFT JOIN DRONES d ON m.DRONE_ID = d.DRONE_ID
+            LEFT JOIN PACKAGES p ON m.PACKAGE_ID = p.PACKAGE_ID
+            LEFT JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            WHERE m.MISSION_ID = %s
+        """
+        cursor.execute(query, (mission_id,))
+        mission = cursor.fetchone()
+
+        if not mission:
+            return jsonify({"success": False, "message": "Mission not found."}), 404
+
+        mission['START_TIME'] = str(mission['START_TIME']) if mission.get('START_TIME') else None
+        mission['END_TIME'] = str(mission['END_TIME']) if mission.get('END_TIME') else None
+
+        return jsonify({"success": True, "mission": mission}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching mission detail: {err}")
+        return jsonify({"success": False, "message": "Database error fetching mission."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions', methods=['POST'])
+@role_required('VENDOR')
+def api_create_mission():
+    """
+    Creates a new mission in 'IDLE' state (START_TIME=NULL, END_TIME=NULL).
+    Validates existence of drone, pilot, package, route, pilot status ('AVAILABLE'), and prevents duplicate active mission assignments.
+    Uses atomic database transaction.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    raw_mission_id = data.get('mission_id')
+    try:
+        drone_id = int(data.get('drone_id'))
+        pilot_id = int(data.get('pilot_id'))
+        package_id = int(data.get('package_id'))
+        route_id = int(data.get('route_id'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Drone ID, Pilot ID, Package ID, and Route ID must be valid integers."}), 400
+
+    custom_mission_id = None
+    if raw_mission_id is not None and str(raw_mission_id).strip() != "":
+        try:
+            custom_mission_id = int(raw_mission_id)
+            if custom_mission_id <= 0:
+                return jsonify({"success": False, "message": "Mission ID must be a positive integer."}), 400
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "message": "Mission ID must be a valid integer."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        if custom_mission_id is not None:
+            cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE MISSION_ID = %s", (custom_mission_id,))
+            if cursor.fetchone():
+                conn.rollback()
+                return jsonify({"success": False, "message": f"Mission ID {custom_mission_id} already exists."}), 400
+            target_mission_id = custom_mission_id
+        else:
+            cursor.execute("SELECT COALESCE(MAX(MISSION_ID), 0) + 1 AS next_id FROM MISSIONS")
+            target_mission_id = cursor.fetchone()['next_id']
+
+        cursor.execute("SELECT DRONE_ID FROM DRONES WHERE DRONE_ID = %s", (drone_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Drone ID {drone_id} does not exist."}), 400
+
+        cursor.execute("SELECT PILOT_ID, STATUS FROM PILOTS WHERE PILOT_ID = %s", (pilot_id,))
+        pilot = cursor.fetchone()
+        if not pilot:
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Pilot ID {pilot_id} does not exist."}), 400
+
+        if pilot['STATUS'] == 'OFF_DUTY':
+            conn.rollback()
+            return jsonify({"success": False, "message": "Cannot assign an OFF_DUTY pilot to a mission."}), 400
+        if pilot['STATUS'] != 'AVAILABLE':
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Pilot is currently in '{pilot['STATUS']}' status and not AVAILABLE."}), 400
+
+        cursor.execute("SELECT PACKAGE_ID FROM PACKAGES WHERE PACKAGE_ID = %s", (package_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Package ID {package_id} does not exist."}), 400
+
+        cursor.execute("SELECT ROUTE_ID FROM ROUTES WHERE ROUTE_ID = %s", (route_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Route ID {route_id} does not exist."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE DRONE_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING')", (drone_id,))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Drone ID {drone_id} is already assigned to an active mission."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE PILOT_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING')", (pilot_id,))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Pilot ID {pilot_id} is already assigned to an active mission."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE PACKAGE_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING')", (package_id,))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Package ID {package_id} is already assigned to an active mission."}), 400
+
+        insert_query = """
+            INSERT INTO MISSIONS (MISSION_ID, DRONE_ID, PILOT_ID, PACKAGE_ID, ROUTE_ID, MISSION_STATUS, START_TIME, END_TIME)
+            VALUES (%s, %s, %s, %s, %s, 'IDLE', NULL, NULL)
+        """
+        cursor.execute(insert_query, (target_mission_id, drone_id, pilot_id, package_id, route_id))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Mission created successfully!",
+            "mission_id": target_mission_id
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": "Duplicate key violation encountered."}), 400
+        if err.errno == 1452:
+            return jsonify({"success": False, "message": "Foreign key constraint violation."}), 400
+        print(f"MySQL Error creating mission: {err}")
+        return jsonify({"success": False, "message": "Database error creating mission."}), 500
+
+    except Exception as ex:
+        if conn:
+            conn.rollback()
+        print(f"Unexpected Exception creating mission: {ex}")
+        return jsonify({"success": False, "message": "An internal server error occurred."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions/<int:mission_id>', methods=['PUT'])
+@role_required('VENDOR')
+def api_update_mission(mission_id):
+    """
+    Updates assignments (drone, pilot, package, route) for an existing IDLE mission.
+    Completed (OVER) missions cannot be modified.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    try:
+        drone_id = int(data.get('drone_id'))
+        pilot_id = int(data.get('pilot_id'))
+        package_id = int(data.get('package_id'))
+        route_id = int(data.get('route_id'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Drone ID, Pilot ID, Package ID, and Route ID must be valid integers."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT MISSION_ID, DRONE_ID, PILOT_ID, PACKAGE_ID, MISSION_STATUS FROM MISSIONS WHERE MISSION_ID = %s", (mission_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            conn.rollback()
+            return jsonify({"success": False, "message": "Mission not found."}), 404
+
+        if existing['MISSION_STATUS'] == 'OVER':
+            conn.rollback()
+            return jsonify({"success": False, "message": "Completed (OVER) missions cannot be modified."}), 400
+
+        cursor.execute("SELECT DRONE_ID FROM DRONES WHERE DRONE_ID = %s", (drone_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Drone ID {drone_id} does not exist."}), 400
+
+        cursor.execute("SELECT PILOT_ID, STATUS FROM PILOTS WHERE PILOT_ID = %s", (pilot_id,))
+        pilot = cursor.fetchone()
+        if not pilot:
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Pilot ID {pilot_id} does not exist."}), 400
+
+        if pilot_id != existing['PILOT_ID']:
+            if pilot['STATUS'] == 'OFF_DUTY':
+                conn.rollback()
+                return jsonify({"success": False, "message": "Cannot assign an OFF_DUTY pilot."}), 400
+            if pilot['STATUS'] != 'AVAILABLE':
+                conn.rollback()
+                return jsonify({"success": False, "message": f"Pilot is currently in '{pilot['STATUS']}' status and not AVAILABLE."}), 400
+
+        cursor.execute("SELECT PACKAGE_ID FROM PACKAGES WHERE PACKAGE_ID = %s", (package_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Package ID {package_id} does not exist."}), 400
+
+        cursor.execute("SELECT ROUTE_ID FROM ROUTES WHERE ROUTE_ID = %s", (route_id,))
+        if not cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Route ID {route_id} does not exist."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE DRONE_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING') AND MISSION_ID != %s", (drone_id, mission_id))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Drone ID {drone_id} is already assigned to another active mission."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE PILOT_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING') AND MISSION_ID != %s", (pilot_id, mission_id))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Pilot ID {pilot_id} is already assigned to another active mission."}), 400
+
+        cursor.execute("SELECT MISSION_ID FROM MISSIONS WHERE PACKAGE_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING') AND MISSION_ID != %s", (package_id, mission_id))
+        if cursor.fetchone():
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Package ID {package_id} is already assigned to another active mission."}), 400
+
+        update_query = """
+            UPDATE MISSIONS 
+            SET DRONE_ID = %s, PILOT_ID = %s, PACKAGE_ID = %s, ROUTE_ID = %s
+            WHERE MISSION_ID = %s
+        """
+        cursor.execute(update_query, (drone_id, pilot_id, package_id, route_id, mission_id))
+
+        conn.commit()
+        return jsonify({"success": True, "message": "Mission updated successfully!"}), 200
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        print(f"MySQL Error updating mission: {err}")
+        return jsonify({"success": False, "message": "Database error updating mission."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions/<int:mission_id>/start', methods=['POST'])
+@role_required('VENDOR')
+def api_start_mission(mission_id):
+    """
+    Starts an IDLE mission:
+    - Sets MISSION_STATUS = 'ONGOING', START_TIME = NOW(), END_TIME = NULL
+    - Updates PILOT.STATUS = 'ON_MISSION'
+    Uses atomic database transaction with rollback.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT MISSION_ID, PILOT_ID, MISSION_STATUS FROM MISSIONS WHERE MISSION_ID = %s", (mission_id,))
+        mission = cursor.fetchone()
+
+        if not mission:
+            conn.rollback()
+            return jsonify({"success": False, "message": "Mission not found."}), 404
+
+        if mission['MISSION_STATUS'] != 'IDLE':
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Cannot start mission in '{mission['MISSION_STATUS']}' status. Only IDLE missions can be started."}), 400
+
+        pilot_id = mission['PILOT_ID']
+        cursor.execute("SELECT PILOT_ID, STATUS FROM PILOTS WHERE PILOT_ID = %s", (pilot_id,))
+        pilot = cursor.fetchone()
+
+        if not pilot:
+            conn.rollback()
+            return jsonify({"success": False, "message": "Assigned pilot record not found."}), 400
+
+        if pilot['STATUS'] == 'OFF_DUTY':
+            conn.rollback()
+            return jsonify({"success": False, "message": "Assigned pilot is OFF_DUTY and cannot start a mission."}), 400
+
+        cursor.execute("""
+            UPDATE MISSIONS 
+            SET MISSION_STATUS = 'ONGOING', START_TIME = NOW(), END_TIME = NULL 
+            WHERE MISSION_ID = %s
+        """, (mission_id,))
+
+        cursor.execute("""
+            UPDATE PILOTS 
+            SET STATUS = 'ON_MISSION' 
+            WHERE PILOT_ID = %s
+        """, (pilot_id,))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Mission {mission_id} started successfully! Pilot status set to ON_MISSION."
+        }), 200
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        print(f"MySQL Error starting mission: {err}")
+        return jsonify({"success": False, "message": "Database error starting mission."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/missions/<int:mission_id>/complete', methods=['POST'])
+@role_required('VENDOR')
+def api_complete_mission(mission_id):
+    """
+    Completes an ONGOING mission:
+    - Sets MISSION_STATUS = 'OVER', preserves START_TIME, sets END_TIME = NOW()
+    - Updates PILOT.STATUS = 'AVAILABLE'
+    Uses atomic database transaction with rollback.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT MISSION_ID, PILOT_ID, MISSION_STATUS, START_TIME FROM MISSIONS WHERE MISSION_ID = %s", (mission_id,))
+        mission = cursor.fetchone()
+
+        if not mission:
+            conn.rollback()
+            return jsonify({"success": False, "message": "Mission not found."}), 404
+
+        if mission['MISSION_STATUS'] != 'ONGOING':
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Cannot complete mission in '{mission['MISSION_STATUS']}' status. Only ONGOING missions can be completed."}), 400
+
+        pilot_id = mission['PILOT_ID']
+
+        cursor.execute("""
+            UPDATE MISSIONS 
+            SET MISSION_STATUS = 'OVER', END_TIME = NOW() 
+            WHERE MISSION_ID = %s
+        """, (mission_id,))
+
+        cursor.execute("""
+            UPDATE PILOTS 
+            SET STATUS = 'AVAILABLE' 
+            WHERE PILOT_ID = %s
+        """, (pilot_id,))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Mission {mission_id} completed successfully! Pilot status reset to AVAILABLE."
+        }), 200
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        print(f"MySQL Error completing mission: {err}")
+        return jsonify({"success": False, "message": "Database error completing mission."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
 
 # -----------------------------------------------------
 # Error Handlers

@@ -12,6 +12,7 @@
             <span class="nav-brand">Drone Delivery Management System</span>
             <ul class="nav-links">
                 <li><a href="{{ url_for('vendor_dashboard') }}" class="active">Dashboard</a></li>
+                <li><a href="{{ url_for('vendor_missions_page') }}">Mission Management</a></li>
                 <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
                 <li><a href="{{ url_for('logout') }}">Logout</a></li>
             </ul>
@@ -26,6 +27,15 @@
         </header>
 
         <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <!-- Quick Actions -->
+        <section class="quick-actions-section">
+            <h3>Quick Actions</h3>
+            <div class="actions-buttons">
+                <a href="{{ url_for('vendor_missions_page') }}" class="btn-action">Mission Management</a>
+                <a href="{{ url_for('profile_page') }}" class="btn-action btn-secondary-action">My Profile</a>
+            </div>
+        </section>
 
         <!-- Vendor Statistics Grid -->
         <section class="stats-grid">

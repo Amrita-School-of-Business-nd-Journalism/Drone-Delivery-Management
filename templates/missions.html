@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mission Management - Drone Delivery System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('vendor_dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('vendor_missions_page') }}" class="active">Missions</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <header class="welcome-header">
+            <h2>Mission Management</h2>
+            <p>Create, assign, start, and complete drone delivery missions.</p>
+        </header>
+
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <!-- Create Mission Form -->
+        <section class="quick-actions-section">
+            <h3>Create New Mission</h3>
+            <form id="create-mission-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="mission-id-input">Mission ID (Optional)</label>
+                        <input type="number" id="mission-id-input" placeholder="Auto-generated if left blank" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="drone-select">Select Drone *</label>
+                        <select id="drone-select" required>
+                            <option value="">Loading drones...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="pilot-select">Select Pilot *</label>
+                        <select id="pilot-select" required>
+                            <option value="">Loading pilots...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="package-select">Select Package *</label>
+                        <select id="package-select" required>
+                            <option value="">Loading packages...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="route-select">Select Route *</label>
+                        <select id="route-select" required>
+                            <option value="">Loading routes...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-submit-mission" class="btn-primary">Create Mission</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <!-- Mission Records Table -->
+        <section class="recent-deliveries-section">
+            <h3>Drone Missions History & Controls</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Mission ID</th>
+                            <th>Drone ID</th>
+                            <th>Pilot</th>
+                            <th>Package ID</th>
+                            <th>Route</th>
+                            <th>Status</th>
+                            <th>Start Time</th>
+                            <th>End Time</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="missions-table-body">
+                        <tr>
+                            <td colspan="9" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading missions...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/missions.js') }}"></script>
+</body>
+</html>
