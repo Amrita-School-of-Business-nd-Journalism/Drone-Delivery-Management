@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battery & Charging Management - Drone Delivery System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-brand">Drone Delivery Management System</span>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('vendor_dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('vendor_missions_page') }}">Missions</a></li>
+                <li><a href="{{ url_for('vendor_batteries_page') }}" class="active">Batteries & Charging</a></li>
+                <li><a href="{{ url_for('profile_page') }}">My Profile</a></li>
+                <li><a href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <header class="welcome-header">
+            <h2>Battery & Charging Management</h2>
+            <p>Monitor battery health, capacity, charge cycles, and manage charging sessions.</p>
+        </header>
+
+        <div id="alert-message" class="alert-box" style="display: none;"></div>
+
+        <!-- Register New Battery Form -->
+        <section class="quick-actions-section">
+            <h3>Register New Battery</h3>
+            <form id="create-battery-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="battery-id-input">Battery ID *</label>
+                        <input type="number" id="battery-id-input" placeholder="e.g., 201" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="battery-drone-select">Assigned Drone *</label>
+                        <select id="battery-drone-select" required>
+                            <option value="">Loading drones...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="capacity-input">Capacity (mAh / Wh) *</label>
+                        <input type="number" id="capacity-input" placeholder="e.g., 5000" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="cycles-input">Initial Cycles</label>
+                        <input type="number" id="cycles-input" value="0" min="0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="status-select">Health Status *</label>
+                        <select id="status-select" required>
+                            <option value="GOOD">GOOD</option>
+                            <option value="BAD">BAD</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-register-battery" class="btn-primary">Register Battery</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <!-- Batteries Overview Table -->
+        <section class="recent-deliveries-section" style="margin-bottom: 2.5rem;">
+            <h3>Batteries Inventory & Controls</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Battery ID</th>
+                            <th>Assigned Drone</th>
+                            <th>Capacity</th>
+                            <th>Charge Cycles</th>
+                            <th>Health Status</th>
+                            <th>Charging State</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="batteries-table-body">
+                        <tr>
+                            <td colspan="7" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading batteries inventory...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Charging Sessions History Table -->
+        <section class="recent-deliveries-section">
+            <h3>Charging Session History</h3>
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Battery ID</th>
+                            <th>Drone ID</th>
+                            <th>Start Time</th>
+                            <th>End Time</th>
+                            <th>Charging Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="charging-history-body">
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading charging history...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/batteries.js') }}"></script>
+</body>
+</html>

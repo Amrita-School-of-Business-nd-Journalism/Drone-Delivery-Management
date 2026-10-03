@@ -123,6 +123,14 @@ def vendor_missions_page():
     """
     return render_template('missions.html')
 
+@app.route('/vendor/batteries', methods=['GET'])
+@role_required('VENDOR')
+def vendor_batteries_page():
+    """
+    Page for Vendor Battery & Charging Management.
+    """
+    return render_template('batteries.html')
+
 @app.route('/profile', methods=['GET'])
 @login_required
 def profile_page():
@@ -1355,6 +1363,353 @@ def api_complete_mission(mission_id):
             conn.rollback()
         print(f"MySQL Error completing mission: {err}")
         return jsonify({"success": False, "message": "Database error completing mission."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+# -----------------------------------------------------
+# Battery & Charging Management API Endpoints
+# -----------------------------------------------------
+@app.route('/api/batteries', methods=['GET'])
+@role_required('VENDOR')
+def api_get_batteries():
+    """
+    Returns list of batteries with status, capacity, cycles, assigned drone info, and active charging status.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+            SELECT 
+                b.BATTERY_ID,
+                b.DRONE_ID,
+                b.CAPACITY,
+                b.CYCLES,
+                b.STATUS,
+                d.CURR_LOCATION AS DRONE_LOCATION,
+                (SELECT cs.START_TIME 
+                 FROM CHARGING_SESSIONS cs 
+                 WHERE cs.BATTERY_ID = b.BATTERY_ID AND cs.END_TIME IS NULL 
+                 LIMIT 1) AS CURRENT_CHARGING_START
+            FROM BATTERIES b
+            LEFT JOIN DRONES d ON b.DRONE_ID = d.DRONE_ID
+            ORDER BY b.BATTERY_ID ASC
+        """
+        cursor.execute(query)
+        batteries = cursor.fetchall()
+
+        for bat in batteries:
+            bat['is_charging'] = bat['CURRENT_CHARGING_START'] is not None
+            bat['CURRENT_CHARGING_START'] = str(bat['CURRENT_CHARGING_START']) if bat['CURRENT_CHARGING_START'] else None
+
+        return jsonify({"success": True, "batteries": batteries}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching batteries: {err}")
+        return jsonify({"success": False, "message": "Database error fetching batteries."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/batteries', methods=['POST'])
+@role_required('VENDOR')
+def api_create_battery():
+    """
+    Registers a new battery assigned to an existing drone.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    try:
+        battery_id = int(data.get('battery_id'))
+        drone_id = int(data.get('drone_id'))
+        capacity = int(data.get('capacity'))
+        cycles = int(data.get('cycles', 0))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Battery ID, Drone ID, Capacity, and Cycles must be valid integers."}), 400
+
+    status = (data.get('status') or 'GOOD').strip().upper()
+
+    if battery_id <= 0 or drone_id <= 0 or capacity <= 0 or cycles < 0:
+        return jsonify({"success": False, "message": "Battery ID, Drone ID, and Capacity must be positive. Cycles cannot be negative."}), 400
+
+    if status not in ['GOOD', 'BAD']:
+        return jsonify({"success": False, "message": "Battery status must be 'GOOD' or 'BAD'."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT DRONE_ID FROM DRONES WHERE DRONE_ID = %s", (drone_id,))
+        if not cursor.fetchone():
+            return jsonify({"success": False, "message": f"Referenced Drone ID {drone_id} does not exist."}), 400
+
+        cursor.execute("SELECT BATTERY_ID FROM BATTERIES WHERE BATTERY_ID = %s", (battery_id,))
+        if cursor.fetchone():
+            return jsonify({"success": False, "message": f"Battery ID {battery_id} already exists."}), 400
+
+        insert_query = """
+            INSERT INTO BATTERIES (BATTERY_ID, DRONE_ID, CAPACITY, CYCLES, STATUS)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(insert_query, (battery_id, drone_id, capacity, cycles, status))
+        conn.commit()
+
+        return jsonify({"success": True, "message": "Battery registered successfully!", "battery_id": battery_id}), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": "Battery ID already exists."}), 400
+        if err.errno == 1452:
+            return jsonify({"success": False, "message": "Referenced Drone ID does not exist."}), 400
+        print(f"MySQL Error registering battery: {err}")
+        return jsonify({"success": False, "message": "Database error registering battery."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/charging-sessions', methods=['GET'])
+@role_required('VENDOR')
+def api_get_charging_sessions():
+    """
+    Returns full charging session history across all batteries or for a specific battery_id query param.
+    """
+    battery_id_param = request.args.get('battery_id')
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        if battery_id_param:
+            query = """
+                SELECT cs.BATTERY_ID, cs.START_TIME, cs.END_TIME, b.DRONE_ID
+                FROM CHARGING_SESSIONS cs
+                JOIN BATTERIES b ON cs.BATTERY_ID = b.BATTERY_ID
+                WHERE cs.BATTERY_ID = %s
+                ORDER BY cs.START_TIME DESC
+            """
+            cursor.execute(query, (battery_id_param,))
+        else:
+            query = """
+                SELECT cs.BATTERY_ID, cs.START_TIME, cs.END_TIME, b.DRONE_ID
+                FROM CHARGING_SESSIONS cs
+                JOIN BATTERIES b ON cs.BATTERY_ID = b.BATTERY_ID
+                ORDER BY cs.START_TIME DESC
+            """
+            cursor.execute(query)
+
+        sessions = cursor.fetchall()
+
+        for s in sessions:
+            s['START_TIME'] = str(s['START_TIME']) if s.get('START_TIME') else None
+            s['END_TIME'] = str(s['END_TIME']) if s.get('END_TIME') else None
+            s['is_ongoing'] = s['END_TIME'] is None
+
+        return jsonify({"success": True, "charging_sessions": sessions}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching charging sessions: {err}")
+        return jsonify({"success": False, "message": "Database error fetching charging history."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/charging-sessions/start', methods=['POST'])
+@role_required('VENDOR')
+def api_start_charging_session():
+    """
+    Starts a charging session for a battery:
+    - Validates battery exists in BATTERIES table.
+    - Ensures no active/overlapping charging session exists for the battery.
+    - Uses database transaction with rollback.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    try:
+        battery_id = int(data.get('battery_id'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Battery ID must be a valid integer."}), 400
+
+    custom_start_time = data.get('start_time')
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT BATTERY_ID, STATUS FROM BATTERIES WHERE BATTERY_ID = %s", (battery_id,))
+        battery = cursor.fetchone()
+        if not battery:
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Referenced Battery ID {battery_id} does not exist."}), 400
+
+        cursor.execute("""
+            SELECT BATTERY_ID, START_TIME 
+            FROM CHARGING_SESSIONS 
+            WHERE BATTERY_ID = %s AND END_TIME IS NULL
+        """, (battery_id,))
+        active_session = cursor.fetchone()
+
+        if active_session:
+            conn.rollback()
+            return jsonify({
+                "success": False, 
+                "message": f"Battery ID {battery_id} is already in an active charging session (Started at {active_session['START_TIME']}). Overlapping charging sessions are not allowed."
+            }), 400
+
+        if custom_start_time:
+            insert_query = """
+                INSERT INTO CHARGING_SESSIONS (BATTERY_ID, START_TIME, END_TIME)
+                VALUES (%s, %s, NULL)
+            """
+            cursor.execute(insert_query, (battery_id, custom_start_time))
+        else:
+            insert_query = """
+                INSERT INTO CHARGING_SESSIONS (BATTERY_ID, START_TIME, END_TIME)
+                VALUES (%s, NOW(), NULL)
+            """
+            cursor.execute(insert_query, (battery_id,))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Charging session started successfully for Battery #{battery_id}!"
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": "A charging session with this exact start timestamp already exists for this battery."}), 400
+        if err.errno == 1452:
+            return jsonify({"success": False, "message": "Referenced Battery ID does not exist."}), 400
+        print(f"MySQL Error starting charging session: {err}")
+        return jsonify({"success": False, "message": "Database error starting charging session."}), 500
+
+    except Exception as ex:
+        if conn:
+            conn.rollback()
+        print(f"Unexpected Exception starting charging session: {ex}")
+        return jsonify({"success": False, "message": "An internal server error occurred."}), 500
+
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/charging-sessions/end', methods=['POST'])
+@role_required('VENDOR')
+def api_end_charging_session():
+    """
+    Ends an active charging session for a battery:
+    - Finds active session (END_TIME IS NULL).
+    - Validates end_time >= START_TIME.
+    - Sets END_TIME = NOW() (or specified end_time).
+    - Increments battery CYCLES by 1.
+    - Uses database transaction with rollback.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    try:
+        battery_id = int(data.get('battery_id'))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Battery ID must be a valid integer."}), 400
+
+    custom_end_time = data.get('end_time')
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT BATTERY_ID, START_TIME 
+            FROM CHARGING_SESSIONS 
+            WHERE BATTERY_ID = %s AND END_TIME IS NULL
+            ORDER BY START_TIME DESC LIMIT 1
+        """, (battery_id,))
+        session_rec = cursor.fetchone()
+
+        if not session_rec:
+            conn.rollback()
+            return jsonify({
+                "success": False, 
+                "message": f"No active charging session found for Battery ID {battery_id}."
+            }), 400
+
+        start_time = session_rec['START_TIME']
+
+        if custom_end_time:
+            cursor.execute("SELECT %s < %s AS is_earlier", (custom_end_time, start_time))
+            chk = cursor.fetchone()
+            if chk and chk['is_earlier']:
+                conn.rollback()
+                return jsonify({
+                    "success": False,
+                    "message": "End time cannot be earlier than start time."
+                }), 400
+
+            update_session_query = """
+                UPDATE CHARGING_SESSIONS 
+                SET END_TIME = %s 
+                WHERE BATTERY_ID = %s AND START_TIME = %s
+            """
+            cursor.execute(update_session_query, (custom_end_time, battery_id, start_time))
+        else:
+            update_session_query = """
+                UPDATE CHARGING_SESSIONS 
+                SET END_TIME = NOW() 
+                WHERE BATTERY_ID = %s AND START_TIME = %s
+            """
+            cursor.execute(update_session_query, (battery_id, start_time))
+
+        update_battery_query = """
+            UPDATE BATTERIES 
+            SET CYCLES = CYCLES + 1 
+            WHERE BATTERY_ID = %s
+        """
+        cursor.execute(update_battery_query, (battery_id,))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Charging session ended for Battery #{battery_id}. Battery cycles incremented."
+        }), 200
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        print(f"MySQL Error ending charging session: {err}")
+        return jsonify({"success": False, "message": "Database error ending charging session."}), 500
 
     finally:
         close_db_connection(conn, cursor)
