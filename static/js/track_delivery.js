@@ -139,6 +139,111 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('res-route-dest').textContent = pkg.destination || 'Not available';
         document.getElementById('res-route-distance').textContent = pkg.distance ? `${pkg.distance} km` : 'Not available';
         document.getElementById('res-route-time').textContent = pkg.estimated_time ? `${pkg.estimated_time} mins` : 'Not available';
+
+        // Checkpoint 3: Load Billing & Payment if Mission is OVER or has Mission ID
+        const billingSection = document.getElementById('billing-section');
+        if (pkg.mission_id && pkg.mission_status === 'OVER') {
+            loadBillingData(pkg.mission_id);
+            if (billingSection) billingSection.style.display = 'block';
+        } else {
+            if (billingSection) billingSection.style.display = 'none';
+        }
+    }
+
+    async function loadBillingData(missionId) {
+        try {
+            const response = await fetch(`/api/customer/billing/${missionId}`);
+            const data = await response.json();
+
+            if (response.ok && data.success && data.billing) {
+                const b = data.billing;
+                document.getElementById('bill-distance').textContent = b.distance_km;
+                document.getElementById('bill-dist-charge').textContent = b.distance_fee.toFixed(2);
+                document.getElementById('bill-weight').textContent = b.weight_kg;
+                document.getElementById('bill-weight-charge').textContent = b.weight_fee.toFixed(2);
+                document.getElementById('bill-total-amount').textContent = b.total_amount;
+                document.getElementById('pay-mission-id').value = missionId;
+
+                const actionContainer = document.getElementById('payment-action-container');
+                const statusContainer = document.getElementById('payment-status-container');
+
+                if (b.is_paid || (b.existing_payment && b.existing_payment.STATUS === 'COMPLETED')) {
+                    if (actionContainer) actionContainer.style.display = 'none';
+                    if (statusContainer) {
+                        statusContainer.style.display = 'block';
+                        statusContainer.style.background = '#ecfdf5';
+                        statusContainer.style.borderColor = '#a7f3d0';
+                        document.getElementById('pay-status-badge').className = 'status-badge badge-completed';
+                        document.getElementById('pay-status-badge').textContent = 'COMPLETED';
+                        document.getElementById('pay-rec-id').textContent = b.existing_payment.PAYMENT_ID;
+                        document.getElementById('pay-rec-mode').textContent = b.existing_payment.MODE;
+                        document.getElementById('pay-rec-amount').textContent = b.existing_payment.AMOUNT;
+                        document.getElementById('pay-rec-date').textContent = b.existing_payment.TIMESTAMP;
+                    }
+                } else if (b.existing_payment && b.existing_payment.STATUS === 'PROCESSING') {
+                    // COD processing
+                    if (actionContainer) actionContainer.style.display = 'none';
+                    if (statusContainer) {
+                        statusContainer.style.display = 'block';
+                        statusContainer.style.background = '#fffbeb';
+                        statusContainer.style.borderColor = '#fde68a';
+                        document.getElementById('pay-status-badge').className = 'status-badge badge-pending';
+                        document.getElementById('pay-status-badge').textContent = 'PROCESSING (COD)';
+                        document.getElementById('pay-rec-id').textContent = b.existing_payment.PAYMENT_ID;
+                        document.getElementById('pay-rec-mode').textContent = 'COD';
+                        document.getElementById('pay-rec-amount').textContent = b.existing_payment.AMOUNT;
+                        document.getElementById('pay-rec-date').textContent = b.existing_payment.TIMESTAMP;
+                    }
+                } else {
+                    if (actionContainer) actionContainer.style.display = 'block';
+                    if (statusContainer) statusContainer.style.display = 'none';
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching billing details:', error);
+        }
+    }
+
+    // Payment Form Handler
+    const paymentForm = document.getElementById('payment-form');
+    if (paymentForm) {
+        paymentForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const missionId = document.getElementById('pay-mission-id').value;
+            const mode = document.getElementById('payment-mode-select').value;
+            const btn = document.getElementById('btn-submit-payment');
+
+            if (!missionId) {
+                showAlert('Missing Mission ID for payment.');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Processing Payment...';
+
+            try {
+                const response = await fetch('/api/customer/payments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mission_id: parseInt(missionId, 10), mode: mode })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showAlert(data.message || 'Payment recorded successfully!', true);
+                    loadBillingData(missionId);
+                } else {
+                    showAlert(data.message || 'Payment submission failed.');
+                }
+            } catch (err) {
+                console.error('Payment error:', err);
+                showAlert('Network error during payment submission.');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Confirm Payment';
+            }
+        });
     }
 
     loadMyPackages();

@@ -54,6 +54,9 @@ def role_required(required_role):
         return decorated_function
     return decorator
 
+vendor_required = role_required('VENDOR')
+customer_required = role_required('CUSTOMER')
+
 # -----------------------------------------------------
 # Page Routes
 # -----------------------------------------------------
@@ -1350,7 +1353,15 @@ def api_get_mission_options():
                 WHERE b.DRONE_ID = d.DRONE_ID AND cs.END_TIME IS NULL
             )
             AND NOT EXISTS (
-                SELECT 1 FROM MAINTENACE m WHERE m.DRONE_ID = d.DRONE_ID AND m.STATUS = 'BAD'
+                SELECT 1 FROM MAINTENACE m 
+                WHERE m.DRONE_ID = d.DRONE_ID 
+                  AND m.MAINTENANCE_ID = (
+                      SELECT m2.MAINTENANCE_ID FROM MAINTENACE m2 
+                      WHERE m2.DRONE_ID = d.DRONE_ID 
+                      ORDER BY m2.REPAIR_DATE DESC, m2.MAINTENANCE_ID DESC 
+                      LIMIT 1
+                  )
+                  AND m.STATUS = 'BAD'
             )
             ORDER BY d.DRONE_ID ASC
         """
@@ -1557,7 +1568,7 @@ def api_create_mission():
         status_code = result[7]
         status_message = result[8].strip()
 
-        if status_code == 200:
+        if status_code in [200, 201]:
             return jsonify({
                 "success": True,
                 "message": status_message,
@@ -1673,9 +1684,15 @@ def api_update_mission(mission_id):
             conn.rollback()
             return jsonify({"success": False, "message": f"Drone #{drone_id} has a battery in an active charging session."}), 400
 
-        # Drone Maintenance check
-        cursor.execute("SELECT COUNT(*) AS bad_count FROM MAINTENACE WHERE DRONE_ID = %s AND STATUS = 'BAD'", (drone_id,))
-        if cursor.fetchone()['bad_count'] > 0:
+        # Drone Maintenance check (checks latest maintenance condition)
+        cursor.execute("""
+            SELECT STATUS FROM MAINTENACE 
+            WHERE DRONE_ID = %s 
+            ORDER BY REPAIR_DATE DESC, MAINTENANCE_ID DESC 
+            LIMIT 1
+        """, (drone_id,))
+        latest_maint = cursor.fetchone()
+        if latest_maint and latest_maint['STATUS'] == 'BAD':
             conn.rollback()
             return jsonify({"success": False, "message": f"Drone #{drone_id} is grounded under active maintenance."}), 400
 
@@ -2187,6 +2204,402 @@ def api_end_charging_session():
 
     finally:
         close_db_connection(conn, cursor)
+
+# -----------------------------------------------------
+# Checkpoint 3: Billing & Payments APIs
+# -----------------------------------------------------
+
+def calculate_mission_billing(distance: float, weight: float) -> int:
+    """
+    Centrally defined deterministic billing formula (Academic model):
+    - Base Fee: ₹50 flat
+    - Distance Rate: ₹10 / km (derived from ROUTES.DISTANCE)
+    - Weight Rate: ₹15 / kg (derived from PACKAGES.WEIGHT)
+    - Total = round(50 + (10 * distance) + (15 * weight))
+    - Min: ₹50, Currency: INR
+    """
+    base_fee = 50
+    dist_rate = 10.0
+    weight_rate = 15.0
+    total = base_fee + (float(distance) * dist_rate) + (float(weight) * weight_rate)
+    return max(50, int(round(total)))
+
+
+@app.route('/api/customer/billing/<int:mission_id>', methods=['GET'])
+@login_required
+@customer_required
+def api_get_customer_billing(mission_id):
+    """
+    Returns deterministic billing calculation and payment status for a customer mission.
+    Enforces customer ownership of the underlying package.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT m.MISSION_ID, m.MISSION_STATUS, m.START_TIME, m.END_TIME,
+                   p.PACKAGE_ID, p.PRODUCT_ID, p.USER_ID, p.WEIGHT,
+                   r.ROUTE_ID, r.SOURCE, r.DESTINATION, r.DISTANCE,
+                   v.VENDOR_NAME
+            FROM MISSIONS m
+            JOIN PACKAGES p ON m.PACKAGE_ID = p.PACKAGE_ID
+            JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            JOIN VENDORS v ON p.VENDOR_ID = v.VENDOR_ID
+            WHERE m.MISSION_ID = %s
+        """
+        cursor.execute(query, (mission_id,))
+        mission = cursor.fetchone()
+
+        if not mission:
+            return jsonify({"success": False, "message": f"Mission #{mission_id} not found."}), 404
+
+        # Enforce customer package ownership
+        if mission['USER_ID'] != session['user_id']:
+            return jsonify({"success": False, "message": "Access denied: Package belongs to another customer."}), 403
+
+        distance = float(mission['DISTANCE'])
+        weight = float(mission['WEIGHT'])
+        base_fee = 50
+        dist_fee = round(distance * 10.0, 2)
+        weight_fee = round(weight * 15.0, 2)
+        total_amount = calculate_mission_billing(distance, weight)
+
+        # Check existing payment history for this mission
+        pay_query = """
+            SELECT PAYMENT_ID, USER_ID, MISSION_ID, TIMESTAMP, MODE, AMOUNT, STATUS
+            FROM PAYMENTS
+            WHERE MISSION_ID = %s
+            ORDER BY PAYMENT_ID DESC
+        """
+        cursor.execute(pay_query, (mission_id,))
+        payments = cursor.fetchall()
+        for p in payments:
+            if isinstance(p.get('TIMESTAMP'), (datetime, date)):
+                p['TIMESTAMP'] = p['TIMESTAMP'].strftime("%Y-%m-%d %H:%M:%S")
+
+        existing_payment = payments[0] if payments else None
+        is_paid = any(p['STATUS'] == 'COMPLETED' for p in payments)
+
+        return jsonify({
+            "success": True,
+            "billing": {
+                "mission_id": mission_id,
+                "mission_status": mission['MISSION_STATUS'],
+                "package_id": mission['PACKAGE_ID'],
+                "vendor_name": mission['VENDOR_NAME'],
+                "source": mission['SOURCE'],
+                "destination": mission['DESTINATION'],
+                "distance_km": distance,
+                "weight_kg": weight,
+                "base_fee": base_fee,
+                "distance_fee": dist_fee,
+                "weight_fee": weight_fee,
+                "total_amount": total_amount,
+                "currency": "INR",
+                "is_paid": is_paid,
+                "eligible_for_payment": mission['MISSION_STATUS'] == 'OVER' and not is_paid,
+                "existing_payment": existing_payment,
+                "all_payments": payments
+            }
+        }), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching billing: {err}")
+        return jsonify({"success": False, "message": "Database error loading billing details."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+
+@app.route('/api/customer/payments', methods=['POST'])
+@login_required
+@customer_required
+def api_process_payment():
+    """
+    Submits a payment for a completed delivery mission via sp_process_payment.
+    Enforces customer ownership, completed mission state, and duplicate prevention.
+    """
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "Missing request payload."}), 400
+
+        mission_id = data.get('mission_id')
+        mode = data.get('mode', 'ONLINE').strip().upper()
+
+        if not mission_id:
+            return jsonify({"success": False, "message": "Mission ID is required."}), 400
+
+        try:
+            mission_id = int(mission_id)
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid Mission ID format."}), 400
+
+        if mode not in ['ONLINE', 'COD']:
+            return jsonify({"success": False, "message": "Unsupported payment mode. Must be ONLINE or COD."}), 400
+
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor()
+
+        # Call sp_process_payment
+        args = (session['user_id'], mission_id, mode, 0, 0, 0, ' ' * 255)
+        result_args = cursor.callproc('sp_process_payment', args)
+
+        payment_id = result_args[3]
+        final_amount = result_args[4]
+        status_code = result_args[5]
+        status_msg = result_args[6].strip() if result_args[6] else ''
+
+        if status_code in [200, 201]:
+            conn.commit()
+            target_status = 'COMPLETED' if mode == 'ONLINE' else 'PROCESSING'
+            return jsonify({
+                "success": True,
+                "message": status_msg,
+                "payment_id": payment_id,
+                "amount": final_amount,
+                "mode": mode,
+                "status": target_status
+            }), status_code
+        else:
+            conn.rollback()
+            return jsonify({"success": False, "message": status_msg}), status_code
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        err_msg = str(err)
+        print(f"MySQL Error processing payment: {err_msg}")
+        if "Payment Integrity Error" in err_msg:
+            return jsonify({"success": False, "message": err_msg.split(':')[-1].strip()}), 400
+        return jsonify({"success": False, "message": "Database error processing payment."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+
+@app.route('/api/customer/payments', methods=['GET'])
+@login_required
+@customer_required
+def api_get_customer_payments():
+    """
+    Returns full payment history for packages belonging to the authenticated customer.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT p.PAYMENT_ID, p.MISSION_ID, pkg.PACKAGE_ID, pkg.PRODUCT_ID,
+                   p.TIMESTAMP, p.MODE, p.AMOUNT, p.STATUS,
+                   r.SOURCE, r.DESTINATION, r.DISTANCE, pkg.WEIGHT,
+                   v.VENDOR_NAME
+            FROM PAYMENTS p
+            JOIN MISSIONS m ON p.MISSION_ID = m.MISSION_ID
+            JOIN PACKAGES pkg ON m.PACKAGE_ID = pkg.PACKAGE_ID
+            JOIN ROUTES r ON m.ROUTE_ID = r.ROUTE_ID
+            JOIN VENDORS v ON pkg.VENDOR_ID = v.VENDOR_ID
+            WHERE pkg.USER_ID = %s
+            ORDER BY p.TIMESTAMP DESC, p.PAYMENT_ID DESC
+        """
+        cursor.execute(query, (session['user_id'],))
+        payments = cursor.fetchall()
+
+        for p in payments:
+            if isinstance(p.get('TIMESTAMP'), (datetime, date)):
+                p['TIMESTAMP'] = p['TIMESTAMP'].strftime("%Y-%m-%d %H:%M:%S")
+
+        return jsonify({"success": True, "payments": payments}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching customer payments: {err}")
+        return jsonify({"success": False, "message": "Database error loading payment records."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+
+# -----------------------------------------------------
+# Checkpoint 3: Maintenance APIs
+# -----------------------------------------------------
+
+@app.route('/api/maintenance', methods=['GET'])
+@login_required
+@vendor_required
+def api_get_maintenance_records():
+    """
+    Returns all maintenance records with drone location and capacity details.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT m.MAINTENANCE_ID, m.DRONE_ID, m.STATUS, m.REPAIR_DATE, m.COST, m.REASON,
+                   d.CURR_LOCATION, d.PAYLOAD_CAP
+            FROM MAINTENACE m
+            JOIN DRONES d ON m.DRONE_ID = d.DRONE_ID
+            ORDER BY m.REPAIR_DATE DESC, m.MAINTENANCE_ID DESC
+        """
+        cursor.execute(query)
+        records = cursor.fetchall()
+
+        for r in records:
+            if isinstance(r.get('REPAIR_DATE'), (datetime, date)):
+                r['REPAIR_DATE'] = r['REPAIR_DATE'].strftime("%Y-%m-%d")
+
+        return jsonify({"success": True, "maintenance_records": records}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching maintenance: {err}")
+        return jsonify({"success": False, "message": "Database error loading maintenance records."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+
+@app.route('/api/maintenance', methods=['POST'])
+@login_required
+@vendor_required
+def api_create_maintenance_record():
+    """
+    Records a maintenance or inspection event for a drone via sp_record_maintenance.
+    """
+    conn = None
+    cursor = None
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "Missing request payload."}), 400
+
+        drone_id = data.get('drone_id')
+        status = data.get('status', 'GOOD').strip().upper()
+        cost = data.get('cost')
+        reason = data.get('reason', '').strip()
+        repair_date = data.get('repair_date')
+
+        if not drone_id or cost is None:
+            return jsonify({"success": False, "message": "Drone ID and Cost are required."}), 400
+
+        try:
+            drone_id = int(drone_id)
+            cost = int(cost)
+        except ValueError:
+            return jsonify({"success": False, "message": "Drone ID and Cost must be valid integers."}), 400
+
+        if cost <= 0:
+            return jsonify({"success": False, "message": "Maintenance cost must be strictly positive."}), 400
+
+        if status not in ['GOOD', 'BAD']:
+            return jsonify({"success": False, "message": "Maintenance status must be GOOD or BAD."}), 400
+
+        if not reason:
+            reason = "Routine Inspection" if status == 'GOOD' else "Issue Detected"
+
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor()
+
+        args = (drone_id, status, cost, reason, repair_date, 0, 0, ' ' * 255)
+        result_args = cursor.callproc('sp_record_maintenance', args)
+
+        maint_id = result_args[5]
+        status_code = result_args[6]
+        status_msg = result_args[7].strip() if result_args[7] else ''
+
+        if status_code in [200, 201]:
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "message": status_msg,
+                "maintenance_id": maint_id
+            }), status_code
+        else:
+            conn.rollback()
+            return jsonify({"success": False, "message": status_msg}), status_code
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        err_msg = str(err)
+        print(f"MySQL Error creating maintenance: {err_msg}")
+        if "Maintenance Error" in err_msg:
+            return jsonify({"success": False, "message": err_msg.split(':')[-1].strip()}), 400
+        return jsonify({"success": False, "message": "Database error saving maintenance record."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+
+@app.route('/api/maintenance/drones-summary', methods=['GET'])
+@login_required
+@vendor_required
+def api_get_drones_maintenance_summary():
+    """
+    Returns each drone with its latest maintenance diagnostics and flight condition.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT d.DRONE_ID, d.PAYLOAD_CAP, d.CURR_LOCATION,
+                   COALESCE(latest_m.STATUS, 'GOOD') AS CURRENT_CONDITION,
+                   latest_m.REPAIR_DATE AS LAST_REPAIR_DATE,
+                   latest_m.REASON AS LAST_REASON,
+                   latest_m.COST AS LAST_COST,
+                   CASE 
+                       WHEN EXISTS (SELECT 1 FROM MISSIONS WHERE DRONE_ID = d.DRONE_ID AND MISSION_STATUS = 'ONGOING') THEN 'IN_FLIGHT'
+                       WHEN EXISTS (SELECT 1 FROM CHARGING_SESSIONS cs JOIN BATTERIES b ON cs.BATTERY_ID = b.BATTERY_ID WHERE b.DRONE_ID = d.DRONE_ID AND cs.END_TIME IS NULL) THEN 'CHARGING'
+                       WHEN COALESCE(latest_m.STATUS, 'GOOD') = 'BAD' THEN 'GROUNDED'
+                       ELSE 'READY'
+                   END AS OPERATIONAL_STATUS
+            FROM DRONES d
+            LEFT JOIN (
+                SELECT m1.*
+                FROM MAINTENACE m1
+                JOIN (
+                    SELECT DRONE_ID, MAX(MAINTENANCE_ID) AS MAX_ID
+                    FROM MAINTENACE
+                    GROUP BY DRONE_ID
+                ) m2 ON m1.MAINTENANCE_ID = m2.MAX_ID
+            ) latest_m ON d.DRONE_ID = latest_m.DRONE_ID
+            ORDER BY d.DRONE_ID ASC
+        """
+        cursor.execute(query)
+        summary = cursor.fetchall()
+
+        for s in summary:
+            if isinstance(s.get('LAST_REPAIR_DATE'), (datetime, date)):
+                s['LAST_REPAIR_DATE'] = s['LAST_REPAIR_DATE'].strftime("%Y-%m-%d")
+
+        return jsonify({"success": True, "drones_summary": summary}), 200
+
+    except MySQLError as err:
+        print(f"MySQL Error fetching drone maintenance summary: {err}")
+        return jsonify({"success": False, "message": "Database error loading drone diagnostics."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
 
 # -----------------------------------------------------
 # Error Handlers

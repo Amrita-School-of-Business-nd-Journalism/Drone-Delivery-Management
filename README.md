@@ -74,6 +74,17 @@ mysql -u root -p DRONEDELIVERY < database/checkpoint2_integrity.sql
 ```
 > **Note:** `database/checkpoint2_integrity.sql` aligns status ENUMs, installs 4 stored procedures (`sp_create_mission`, `sp_start_mission`, `sp_complete_mission`, `sp_cancel_mission`), and installs 4 database triggers enforcing payload limits, flight state transitions, and charging locks. It is idempotent.
 
+### Step 4: Apply Payments Billing & Maintenance Diagnostics Objects
+Deploy the billing procedures, payment integrity guards, and maintenance stored procedures for Checkpoint 3:
+```bash
+mysql -u root -p DRONEDELIVERY < database/checkpoint3_maintenance_payments.sql
+```
+> **Note:** `database/checkpoint3_maintenance_payments.sql` configures auto-increment for `PAYMENTS` and `MAINTENACE`, installs `sp_process_payment` and `sp_record_maintenance`, installs triggers `trg_check_payment_mission_status` and `trg_check_maintenance_validity`, and updates mission dispatch procedures to evaluate latest maintenance conditions. It is idempotent and safe to run on existing databases.
+
+#### Database Installation Summary:
+- **Fresh Database Setup:** Execute Step 1 (`DDL.sql`) $\rightarrow$ Step 2 (`seeds.sql`) $\rightarrow$ Step 3 (`checkpoint2_integrity.sql`) $\rightarrow$ Step 4 (`checkpoint3_maintenance_payments.sql`).
+- **Existing Populated Database:** Steps 3 and 4 can be safely executed or rerun at any time without dropping tables or losing live users, packages, or flight history.
+
 ---
 
 ## 4. Environment Configuration
@@ -244,33 +255,127 @@ To guarantee ACID consistency and business invariant enforcement at the database
 
 ---
 
-## 9. Automated Testing & Verification
+## 9. Payments, Billing & Academic Pricing Model
 
-The test suite validates both positive operational lifecycles and negative edge-case rejections, including database trigger locks and transaction rollbacks.
+### A. Academic Pricing Formula
+To calculate delivery charges without external billing services, the system introduces a deterministic, server-validated academic pricing formula:
 
-### Run Automated Tests:
-```bash
-# Ensure virtual environment is activated and database is running:
-python -m unittest tests/test_checkpoint2.py -v
-```
+$$\text{AMOUNT} = \max\left(50, \operatorname{round}\left(50 + (10 \times \text{DISTANCE}) + (15 \times \text{WEIGHT})\right)\right)$$
 
-### Test Coverage Summary:
-* `test_01_complete_mission_lifecycle_positive`: Full end-to-end lifecycle (`IDLE` $\rightarrow$ `ONGOING` $\rightarrow$ `OVER`, drone location sync, last delivery timestamp update, pilot release).
-* `test_02_mission_cancellation_flow`: Cancellation from `IDLE` state releases assets.
-* `test_03_reject_overweight_package`: Rejects creation when package weight exceeds drone payload capacity.
-* `test_04_reject_cross_vendor_package_dispatch`: Prevents Vendor A from dispatching Vendor B's package (403 Forbidden).
-* `test_05_reject_drone_currently_charging`: Prevents mission start when drone is charging.
-* `test_06_reject_charging_when_drone_flying`: Trigger rejects charging session insertion while drone is flying.
-* `test_07_trigger_rejects_illegal_state_transition`: Trigger blocks illegal transitions (e.g. `IDLE` directly to `OVER`).
-* `test_08_customer_cannot_dispatch_missions`: Role guard blocks non-vendors with 403 Forbidden.
-* `test_09_package_tracking_reflects_lifecycle`: Live package tracking reflects status changes accurately.
-* `test_10_transaction_rollback_on_failure`: Database rollback test verifying no partial state commits occur on failure.
-* `test_11_reject_double_booking_active_assets`: Trigger blocks concurrent double-booking of package/pilot/drone.
-* `test_12_pilot_duty_toggle_guard`: Pilot cannot be switched to `OFF_DUTY` while assigned to an active mission.
+* **Base Handling Fee:** ₹50.00 flat fee for every delivery.
+* **Distance Rate:** ₹10.00 per kilometer (derived from `ROUTES.DISTANCE`).
+* **Weight Rate:** ₹15.00 per kilogram (derived from `PACKAGES.WEIGHT`).
+* **Currency:** Indian Rupee (INR / ₹).
+* **Rounding & Storage:** Rounded to the nearest integer to match the schema type `PAYMENTS.AMOUNT INT(11)`.
+* **Example Calculation:**
+  * For Route 1 (8.5 km) carrying a 4 kg package:
+  * $\text{Total} = 50 + (10 \times 8.5) + (15 \times 4) = 50 + 85 + 60 = 195 \text{ INR}$.
+
+### B. Payment Workflow & Invariants
+* **Eligibility:** Payment can **only** be submitted for completed missions (`MISSION_STATUS = 'OVER'`). Attempting to pay for `IDLE` or `ONGOING` missions is blocked at both API and trigger levels.
+* **Customer Ownership:** Enforced via SQL queries matching `PACKAGES.USER_ID = session['user_id']`. Non-owners and vendors are blocked with `403 Forbidden`.
+* **Duplicate Prevention:** Once a payment is recorded with `STATUS = 'COMPLETED'`, further payment requests for that mission return `409 Conflict`.
+* **Supported Modes:**
+  * `ONLINE`: In this academic demo system (without an external banking gateway), this records the payment as `COMPLETED` immediately.
+  * `COD` (Cash on Delivery): Records the payment as `PROCESSING`, awaiting cash handover upon physical receipt.
+* **Audit Trail:** Payments are stored permanently in `PAYMENTS`; records are never deleted to reverse a transaction.
 
 ---
 
-## 10. Common Database Connection & Initialization Errors
+## 10. Drone Maintenance & Grounding Diagnostics
+
+### A. Operational Workflow
+* Accessible from the **Vendor Dashboard** under the **Drone Maintenance** section (`#maintenance-section`).
+* Vendors can log diagnostic inspection events:
+  * **Condition Status:** `GOOD` (Clearance / Routine inspection passed) or `BAD` (Issue detected / Grounded).
+  * **Repair Cost:** Must be a positive integer ($\text{COST} > 0$).
+  * **Repair Date:** Defaults to current date (future dates beyond 1 day rejected).
+  * **Reason / Notes:** Diagnostic description (e.g., "Rotor frame fracture", "Routine inspection").
+
+### B. Flight-Readiness Integration
+* A drone whose **latest** maintenance record has `STATUS = 'BAD'` is strictly grounded.
+* Grounded drones cannot be selected or dispatched in `sp_create_mission` or launched in `sp_start_mission`.
+* Recording a subsequent `STATUS = 'GOOD'` inspection record clears the issue and restores flight eligibility.
+* An older `GOOD` record does not override a subsequent `BAD` record, maintaining flight safety invariants.
+
+---
+
+## 11. Stored Procedures, Triggers & Transactions Summary
+
+### Stored Procedures (6 Total)
+1. **`sp_create_mission`**: Atomic validation (ownership, payload weight, battery health, charging locks, latest maintenance status) and insertion in `IDLE` state.
+2. **`sp_start_mission`**: Row-locked (`FOR UPDATE`) re-verification and transition to `ONGOING`, setting pilot to `ON_MISSION`.
+3. **`sp_complete_mission`**: Atomic 4-table update: mission marked `OVER`, pilot released to `AVAILABLE`, package set to `NOT AVAILABLE`, drone location synced to destination with updated `LAST_DELIVERY`.
+4. **`sp_cancel_mission`**: Aborts `IDLE` mission and restores package/pilot availability.
+5. **`sp_process_payment`**: Validates customer ownership, enforces completed mission state, applies deterministic billing formula, checks for duplicate completion, and inserts into `PAYMENTS`.
+6. **`sp_record_maintenance`**: Validates cost and status, logs maintenance event, and updates drone diagnostic history.
+
+### Database Triggers (6 Total)
+1. **`trg_check_mission_payload_assignment`**: Blocks insertion/update if package weight exceeds drone capacity or if drone/pilot/package is already on an active mission.
+2. **`trg_check_mission_transition`**: Enforces legal state machine transitions (`IDLE` $\rightarrow$ `ONGOING`/`CANCELLED`, `ONGOING` $\rightarrow$ `OVER`).
+3. **`trg_check_charging_drone_not_flying`**: Blocks charging session insertion for drones actively flying.
+4. **`trg_check_mission_start_drone_not_charging`**: Blocks mission launch if drone is actively charging.
+5. **`trg_check_payment_mission_status`**: Blocks payment logging if mission is not `OVER` or if duplicate completed payment exists.
+6. **`trg_check_maintenance_validity`**: Enforces `COST > 0` and rejects invalid future repair dates.
+
+---
+
+## 12. Automated Testing & Verification
+
+The test suite contains 24 automated unit and integration tests covering static checks, authorization, flight integrity, charging restrictions, payment workflows, maintenance diagnostics, and transactional rollbacks.
+
+### Run All Test Suites:
+```bash
+# Ensure virtual environment is activated:
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+### Run Checkpoint-Specific Suites:
+```bash
+# Checkpoint 2 (Lifecycle Integrity & Triggers - 12 tests):
+python -m unittest tests/test_checkpoint2.py -v
+
+# Checkpoint 3 (Payments & Maintenance Diagnostics - 12 tests):
+python -m unittest tests/test_checkpoint3.py -v
+```
+
+---
+
+## 13. End-to-End Demo Walkthrough
+
+1. **Customer Package Booking:**
+   * Login as customer (`rahul.verma@example.com` / `password123`).
+   * Book a delivery request (Warehouse A to Zone A, Weight: 4 kg).
+2. **Vendor Mission Dispatch:**
+   * Login as vendor (`vikram.malhotra@apexlogistics.com` / `password123`).
+   * On **Missions** page, select the package, an available drone, an available pilot, and Route 1.
+   * Click **Create Mission** (`IDLE`).
+   * Click **Start Mission** (`ONGOING` &mdash; pilot status becomes `ON_MISSION`).
+   * Click **Complete Mission** (`OVER` &mdash; pilot freed, drone moved to Zone A).
+3. **Customer Billing & Payment:**
+   * Return to customer account and open **Track Delivery**.
+   * View the calculated bill breakdown: Base (₹50) + Distance (8.5 km @ ₹10 = ₹85) + Weight (4 kg @ ₹15 = ₹60) = ₹195.
+   * Select `ONLINE` payment and submit. The status transitions to `COMPLETED`.
+   * Open the **Dashboard** to see the payment transaction logged in **Billing & Payment History**.
+4. **Maintenance Diagnostics & Grounding Demo:**
+   * Return to vendor dashboard and navigate to **Fleet Maintenance**.
+   * Ground Drone 101: Select Drone 101, Status `BAD`, Cost `300`, Reason `Motor bearing wear`.
+   * Try to create a mission with Drone 101: The system rejects creation ("Drone is grounded under active maintenance").
+   * Clear Drone 101: Select Drone 101, Status `GOOD`, Cost `150`, Reason `Bearings replaced and tested`.
+   * Drone 101 is now flight-ready again.
+
+---
+
+## 14. DBMS Architecture & Viva Review Summary
+
+* **Relational Schema:** 11 normalized tables (`USERS`, `VENDORS`, `DRONES`, `PILOTS`, `BATTERIES`, `MAINTENACE`, `CHARGING_SESSIONS`, `PACKAGES`, `ROUTES`, `MISSIONS`, `PAYMENTS`).
+* **Integrity Constraints:** Primary keys, foreign key cascading controls, unique constraints on user emails, phone numbers, pilot licenses, vendor product IDs, and CHECK constraints (`AMOUNT > 0`, `COST > 0`, phone regexp).
+* **Concurrency & ACID Transactions:** Stored procedures utilize `START TRANSACTION`, `COMMIT`, `ROLLBACK`, and `SELECT ... FOR UPDATE` row locks to prevent race conditions during dispatch and billing.
+* **Triggers vs Application Logic:** Critical safety invariants (payload capacity, state machine transitions, charging while flying, payment on incomplete delivery) are enforced directly within MariaDB triggers to ensure data integrity cannot be bypassed by raw SQL or external clients.
+
+---
+
+## 15. Common Database Connection & Initialization Errors
 
 | Error Symptom | Common Root Cause | Resolution |
 | :--- | :--- | :--- |

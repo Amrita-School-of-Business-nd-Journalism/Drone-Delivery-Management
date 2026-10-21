@@ -130,6 +130,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dronesTableBody) return;
         dronesTableBody.innerHTML = '';
 
+        // Also populate maintenance drone select dropdown
+        const maintDroneSelect = document.getElementById('maint-drone-select');
+        if (maintDroneSelect) {
+            maintDroneSelect.innerHTML = '<option value="">-- Select Drone --</option>';
+            drones.forEach(d => {
+                const opt = document.createElement('option');
+                opt.value = d.DRONE_ID;
+                opt.textContent = `Drone #${d.DRONE_ID} (${d.PAYLOAD_CAP} kg - ${d.CURR_LOCATION})`;
+                maintDroneSelect.appendChild(opt);
+            });
+        }
+
         if (drones.length === 0) {
             dronesTableBody.innerHTML = `
                 <tr>
@@ -473,9 +485,129 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // =========================================================================
+    // 5. Drone Diagnostics & Maintenance Management
+    // =========================================================================
+    const maintTableBody = document.getElementById('maintenance-table-body');
+    const registerMaintForm = document.getElementById('register-maintenance-form');
+    const btnRegisterMaint = document.getElementById('btn-register-maint');
+
+    async function loadMaintenanceRecords() {
+        if (!maintTableBody) return;
+        try {
+            const response = await fetch('/api/maintenance');
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                renderMaintenance(data.maintenance_records || []);
+            } else {
+                maintTableBody.innerHTML = `
+                    <tr><td colspan="6" style="text-align: center; color: #dc2626; padding: 1rem;">
+                        ${data.message || 'Failed to load maintenance history.'}
+                    </td></tr>
+                `;
+            }
+        } catch (err) {
+            console.error('Error loading maintenance:', err);
+            maintTableBody.innerHTML = `
+                <tr><td colspan="6" style="text-align: center; color: #dc2626; padding: 1rem;">
+                    Network error loading maintenance history.
+                </td></tr>
+            `;
+        }
+    }
+
+    function renderMaintenance(records) {
+        if (!maintTableBody) return;
+        maintTableBody.innerHTML = '';
+
+        if (records.length === 0) {
+            maintTableBody.innerHTML = `
+                <tr>
+                    <td colspan="6" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                        No maintenance or diagnostic records found. Use the form above to record inspection or service events.
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        records.forEach(m => {
+            const tr = document.createElement('tr');
+            let badgeClass = m.STATUS === 'GOOD' ? 'badge-completed' : 'badge-error';
+            let label = m.STATUS === 'GOOD' ? 'GOOD (Cleared)' : 'BAD (Grounded)';
+
+            tr.innerHTML = `
+                <td><strong>#${m.MAINTENANCE_ID}</strong></td>
+                <td><strong>Drone #${m.DRONE_ID}</strong> (${m.CURR_LOCATION})</td>
+                <td><span class="status-badge ${badgeClass}">${label}</span></td>
+                <td>${m.REPAIR_DATE}</td>
+                <td><strong>₹${m.COST}</strong></td>
+                <td>${m.REASON}</td>
+            `;
+            maintTableBody.appendChild(tr);
+        });
+    }
+
+    if (registerMaintForm) {
+        registerMaintForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideAlert();
+
+            const droneIdVal = document.getElementById('maint-drone-select').value;
+            const statusVal = document.getElementById('maint-status-select').value;
+            const costVal = document.getElementById('maint-cost-input').value.trim();
+            const dateVal = document.getElementById('maint-date-input').value;
+            const reasonVal = document.getElementById('maint-reason-input').value.trim();
+
+            if (!droneIdVal || !costVal || !reasonVal) {
+                showAlert('Drone, Cost, and Reason are required.');
+                return;
+            }
+
+            const payload = {
+                drone_id: parseInt(droneIdVal, 10),
+                status: statusVal,
+                cost: parseInt(costVal, 10),
+                reason: reasonVal
+            };
+
+            if (dateVal) {
+                payload.repair_date = dateVal;
+            }
+
+            btnRegisterMaint.disabled = true;
+            btnRegisterMaint.textContent = 'Logging...';
+
+            try {
+                const response = await fetch('/api/maintenance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showAlert(data.message || 'Maintenance record saved successfully!', true);
+                    registerMaintForm.reset();
+                    loadMaintenanceRecords();
+                } else {
+                    showAlert(data.message || 'Failed to record maintenance.');
+                }
+            } catch (err) {
+                console.error('Error logging maintenance:', err);
+                showAlert('Network error while saving maintenance record.');
+            } finally {
+                btnRegisterMaint.disabled = false;
+                btnRegisterMaint.textContent = 'Log Maintenance';
+            }
+        });
+    }
+
     // Initialize all sections
     loadVendorDashboard();
     loadDrones();
     loadPilots();
     loadRoutes();
+    loadMaintenanceRecords();
 });

@@ -36,6 +36,7 @@
                 <a href="{{ url_for('vendor_missions_page') }}" class="btn-action">Mission Management</a>
                 <a href="{{ url_for('vendor_batteries_page') }}" class="btn-action">Batteries & Charging</a>
                 <a href="#drones-section" class="btn-action btn-secondary-action">Manage Fleet</a>
+                <a href="#maintenance-section" class="btn-action btn-secondary-action">Fleet Maintenance</a>
                 <a href="#pilots-section" class="btn-action btn-secondary-action">Pilots Roster</a>
                 <a href="#routes-section" class="btn-action btn-secondary-action">Delivery Corridors</a>
                 <a href="{{ url_for('profile_page') }}" class="btn-action btn-secondary-action">My Profile</a>
@@ -244,6 +245,71 @@
                         <tr>
                             <td colspan="4" style="text-align: center; color: #64748b; padding: 1.5rem;">
                                 Loading delivery routes...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Drone Diagnostics & Maintenance Management Section -->
+        <section id="maintenance-section" class="quick-actions-section" style="margin-top: 2.5rem;">
+            <h3>Drone Maintenance: Diagnostics & Grounding Clearance</h3>
+            <p style="color: #64748b; margin-bottom: 1.25rem; font-size: 0.95rem;">
+                Log maintenance, repairs, and routine inspections for drone airframes. 
+                Setting status to <strong>BAD</strong> grounds the drone and prevents mission assignment. 
+                Recording a subsequent <strong>GOOD</strong> inspection restores flight eligibility.
+            </p>
+
+            <form id="register-maintenance-form" style="margin-bottom: 1.5rem;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="maint-drone-select">Target Drone *</label>
+                        <select id="maint-drone-select" required>
+                            <option value="">-- Select Drone --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="maint-status-select">Condition Status *</label>
+                        <select id="maint-status-select" required>
+                            <option value="GOOD">GOOD (Inspection Passed / Cleared)</option>
+                            <option value="BAD">BAD (Issue Detected / Grounded)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="maint-cost-input">Repair Cost (₹) *</label>
+                        <input type="number" id="maint-cost-input" placeholder="e.g. 150" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="maint-date-input">Repair Date (Optional)</label>
+                        <input type="date" id="maint-date-input">
+                    </div>
+                    <div class="form-group" style="flex: 2; min-width: 220px;">
+                        <label for="maint-reason-input">Reason / Notes *</label>
+                        <input type="text" id="maint-reason-input" placeholder="e.g. Rotor inspection passed" maxlength="100" required>
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-register-maint" class="btn-primary">Log Maintenance</button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Log ID</th>
+                            <th>Drone ID</th>
+                            <th>Condition Status</th>
+                            <th>Repair Date</th>
+                            <th>Cost (₹)</th>
+                            <th>Reason / Diagnostic Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="maintenance-table-body">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading maintenance history...
                             </td>
                         </tr>
                     </tbody>

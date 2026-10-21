@@ -101,6 +101,59 @@
                 </div>
 
             </div>
+
+            <!-- Billing & Payment Section -->
+            <section id="billing-section" class="quick-actions-section" style="margin-top: 2rem; display: none;">
+                <h3>Billing & Delivery Settlement</h3>
+                <p style="color: #64748b; font-size: 0.95rem; margin-bottom: 1.25rem;">
+                    Academic pricing formula: Base Fee (₹50) + Distance Rate (₹10/km) + Weight Rate (₹15/kg).
+                </p>
+
+                <div id="billing-summary-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <span style="color: #64748b; font-size: 0.85rem;">Base Handling Fee</span>
+                            <div style="font-weight: 700; color: #1e293b; font-size: 1.1rem;">₹50.00</div>
+                        </div>
+                        <div>
+                            <span style="color: #64748b; font-size: 0.85rem;">Distance Charge (<span id="bill-distance">-</span> km @ ₹10/km)</span>
+                            <div style="font-weight: 700; color: #1e293b; font-size: 1.1rem;">₹<span id="bill-dist-charge">-</span></div>
+                        </div>
+                        <div>
+                            <span style="color: #64748b; font-size: 0.85rem;">Weight Charge (<span id="bill-weight">-</span> kg @ ₹15/kg)</span>
+                            <div style="font-weight: 700; color: #1e293b; font-size: 1.1rem;">₹<span id="bill-weight-charge">-</span></div>
+                        </div>
+                        <div style="border-left: 2px solid #2563eb; padding-left: 1rem;">
+                            <span style="color: #2563eb; font-size: 0.85rem; font-weight: 600;">Total Amount Due</span>
+                            <div style="font-weight: 800; color: #1e293b; font-size: 1.4rem;">₹<span id="bill-total-amount">-</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Payment Action or Status -->
+                <div id="payment-action-container">
+                    <form id="payment-form" style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+                        <input type="hidden" id="pay-mission-id" value="">
+                        <div class="form-group" style="min-width: 200px; margin-bottom: 0;">
+                            <label for="payment-mode-select">Select Payment Mode *</label>
+                            <select id="payment-mode-select" required>
+                                <option value="ONLINE">ONLINE (Instant Demo Settlement)</option>
+                                <option value="COD">COD (Cash On Delivery)</option>
+                            </select>
+                        </div>
+                        <button type="submit" id="btn-submit-payment" class="btn-primary" style="width: auto; padding: 0.75rem 1.75rem;">
+                            Confirm Payment
+                        </button>
+                    </form>
+                </div>
+
+                <div id="payment-status-container" style="display: none; padding: 1rem; border-radius: 6px; background: #ecfdf5; border: 1px solid #a7f3d0; margin-top: 1rem;">
+                    <p style="margin: 0; color: #065f46; font-size: 0.95rem;">
+                        <strong>Payment Status:</strong> <span id="pay-status-badge" class="status-badge badge-completed">COMPLETED</span> &mdash;
+                        Payment ID: <strong>#<span id="pay-rec-id">-</span></strong> | Mode: <strong><span id="pay-rec-mode">-</span></strong> | Amount: <strong>₹<span id="pay-rec-amount">-</span></strong> | Date: <strong><span id="pay-rec-date">-</span></strong>
+                    </p>
+                </div>
+            </section>
         </div>
 
         <footer style="margin-top: 2rem; text-align: center;">
