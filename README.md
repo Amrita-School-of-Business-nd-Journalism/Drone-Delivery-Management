@@ -67,6 +67,13 @@ mysql -u root -p DRONEDELIVERY < database/seeds.sql
 ```
 > **Note:** `database/seeds.sql` is fully idempotent using `ON DUPLICATE KEY UPDATE`. It can safely be executed repeatedly without causing duplicate key collisions or database corruption.
 
+### Step 3: Apply Delivery Lifecycle Integrity Objects (Stored Procedures & Triggers)
+Deploy the business logic constraints, stored procedures, and triggers for Checkpoint 2:
+```bash
+mysql -u root -p DRONEDELIVERY < database/checkpoint2_integrity.sql
+```
+> **Note:** `database/checkpoint2_integrity.sql` aligns status ENUMs, installs 4 stored procedures (`sp_create_mission`, `sp_start_mission`, `sp_complete_mission`, `sp_cancel_mission`), and installs 4 database triggers enforcing payload limits, flight state transitions, and charging locks. It is idempotent.
+
 ---
 
 ## 4. Environment Configuration
@@ -163,18 +170,107 @@ Once logged in as a **Vendor**, the application provides the following controls:
 
 ### D. Mission Dispatch & Management
 * Navigate to **Missions** via the top navigation bar (`/vendor/missions`).
-* The creation form dynamically populates with all registered drones, available pilots, pending packages, and valid routes.
+* The creation form dynamically populates only with valid options:
+  * Only packages belonging to the authenticated vendor that are available/ready for dispatch.
+  * Only flight-ready drones (not currently charging, no active grounding maintenance, and possessing a healthy non-discharged battery).
+  * Only available pilots (excluding pilots `OFF_DUTY` or assigned to active missions).
 * Initiate dispatch by clicking **Start Mission** (`IDLE` $\rightarrow$ `ONGOING`), which sets the pilot status to `ON_MISSION`.
-* Finalize delivery by clicking **Complete Mission** (`ONGOING` $\rightarrow$ `OVER`), which releases the pilot back to `AVAILABLE`.
+* Finalize delivery by clicking **Complete Mission** (`ONGOING` $\rightarrow$ `OVER`), which atomically releases the pilot back to `AVAILABLE`, marks the package as `NOT AVAILABLE` / delivered, and updates the drone's current location to the route destination with updated `LAST_DELIVERY` timestamp.
+* Alternatively, abort an idle mission by clicking **Cancel Mission** (`IDLE` $\rightarrow$ `CANCELLED`), which releases package, pilot, and drone back to the available pool.
 
 ### E. Battery & Charging Supervision
 * Navigate to **Batteries & Charging** (`/vendor/batteries`).
 * Register new battery hardware linked to an existing drone.
 * Manage charging sessions: click **Start Charging** to begin a charge; click **End Charging** to finalize the session and increment the battery's charge cycle counter.
+* Drones currently engaged in active flight missions (`ONGOING`) are locked at both the application and database trigger level from beginning charging sessions.
 
 ---
 
-## 8. Common Database Connection & Initialization Errors
+## 8. Delivery Lifecycle Integrity, Stored Procedures & Triggers
+
+To guarantee ACID consistency and business invariant enforcement at the database layer, Checkpoint 2 introduces dedicated stored procedures and triggers defined in `database/checkpoint2_integrity.sql`.
+
+### Stored Procedures
+
+1. **`sp_create_mission(p_vendor_id, p_drone_id, p_pilot_id, p_package_id, p_route_id, OUT p_mission_id, OUT p_status_code, OUT p_status_msg)`**
+   * Verifies vendor ownership of the package.
+   * Checks package status (`AVAILABLE` or `READY`), pilot status (`AVAILABLE`), and ensures none are tied to active (`IDLE` or `ONGOING`) missions.
+   * Verifies drone payload capacity (`WEIGHT <= PAYLOAD_CAP`).
+   * Validates drone flight eligibility (no active charging, no open maintenance, healthy battery).
+   * Inserts the mission record in `IDLE` state atomically.
+2. **`sp_start_mission(p_mission_id, p_vendor_id, OUT p_status_code, OUT p_status_msg)`**
+   * Locks the mission record with `FOR UPDATE`.
+   * Confirms mission is in `IDLE` state and owned by the vendor.
+   * Re-evaluates live readiness of drone, pilot, and package.
+   * Atomically transitions mission status to `ONGOING`, sets `START_TIME = NOW()`, and sets pilot status to `ON_MISSION`.
+3. **`sp_complete_mission(p_mission_id, p_vendor_id, OUT p_status_code, OUT p_status_msg)`**
+   * Locks the mission record with `FOR UPDATE`.
+   * Confirms mission is currently in `ONGOING` state.
+   * Sets `MISSION_STATUS = 'OVER'`, `END_TIME = NOW()`.
+   * Sets assigned pilot status back to `AVAILABLE`.
+   * Updates `DRONES.LAST_DELIVERY = NOW()` and moves `DRONES.CURR_LOCATION` to `ROUTES.DEST_LOCATION`.
+   * Marks package status as `NOT AVAILABLE` (delivered).
+4. **`sp_cancel_mission(p_mission_id, p_vendor_id, OUT p_status_code, OUT p_status_msg)`**
+   * Locks the mission record with `FOR UPDATE`.
+   * Confirms mission is currently `IDLE`.
+   * Transitions `MISSION_STATUS = 'CANCELLED'`.
+   * Releases package and pilot reservations, ensuring pilot remains `AVAILABLE`.
+
+### Database Triggers
+
+1. **`trg_check_mission_payload_assignment` (BEFORE INSERT / UPDATE on `MISSIONS`):**
+   * Enforces cargo weight cannot exceed drone payload capacity (`SIGNAL SQLSTATE '45000'`).
+   * Rejects duplicate assignment of package, drone, or pilot if already reserved by another active mission (`IDLE` or `ONGOING`).
+2. **`trg_check_mission_transition` (BEFORE UPDATE on `MISSIONS`):**
+   * Restricts lifecycle state changes strictly to valid transitions:
+     * `IDLE` $\rightarrow$ `ONGOING` or `CANCELLED`
+     * `ONGOING` $\rightarrow$ `OVER`
+   * Prohibits tampering with historical/terminal missions (`OVER` or `CANCELLED`).
+3. **`trg_check_charging_drone_not_flying` (BEFORE INSERT on `CHARGING_SESSIONS`):**
+   * Prevents initiating a charging session on a drone that is actively flying an `ONGOING` mission.
+4. **`trg_check_mission_start_drone_not_charging` (BEFORE UPDATE on `MISSIONS`):**
+   * Prevents transitioning a mission to `ONGOING` if the drone has an active charging session (`END_TIME IS NULL`).
+
+### Atomic Transaction Workflows
+
+1. **Mission Creation Workflow (`POST /api/missions`):**
+   * Executed within a MariaDB transaction block inside `sp_create_mission`.
+   * Atomically evaluates eligibility across 5 tables (`PACKAGES`, `PILOTS`, `DRONES`, `BATTERIES`, `MAINTENACE`) and inserts the `MISSIONS` record.
+2. **Mission Start Dispatch Workflow (`POST /api/missions/<id>/start`):**
+   * Row-level locking (`SELECT ... FOR UPDATE`) prevents concurrent double-dispatch races.
+   * Synchronously transitions `MISSIONS` to `ONGOING` and `PILOTS` to `ON_MISSION`.
+3. **Mission Finalization Workflow (`POST /api/missions/<id>/complete`):**
+   * Atomically mutates 4 tables (`MISSIONS`, `PILOTS`, `DRONES`, `PACKAGES`) in one isolated transaction commit: mission marked `OVER`, pilot freed, drone relocated and stamped, package completed.
+
+---
+
+## 9. Automated Testing & Verification
+
+The test suite validates both positive operational lifecycles and negative edge-case rejections, including database trigger locks and transaction rollbacks.
+
+### Run Automated Tests:
+```bash
+# Ensure virtual environment is activated and database is running:
+python -m unittest tests/test_checkpoint2.py -v
+```
+
+### Test Coverage Summary:
+* `test_01_complete_mission_lifecycle_positive`: Full end-to-end lifecycle (`IDLE` $\rightarrow$ `ONGOING` $\rightarrow$ `OVER`, drone location sync, last delivery timestamp update, pilot release).
+* `test_02_mission_cancellation_flow`: Cancellation from `IDLE` state releases assets.
+* `test_03_reject_overweight_package`: Rejects creation when package weight exceeds drone payload capacity.
+* `test_04_reject_cross_vendor_package_dispatch`: Prevents Vendor A from dispatching Vendor B's package (403 Forbidden).
+* `test_05_reject_drone_currently_charging`: Prevents mission start when drone is charging.
+* `test_06_reject_charging_when_drone_flying`: Trigger rejects charging session insertion while drone is flying.
+* `test_07_trigger_rejects_illegal_state_transition`: Trigger blocks illegal transitions (e.g. `IDLE` directly to `OVER`).
+* `test_08_customer_cannot_dispatch_missions`: Role guard blocks non-vendors with 403 Forbidden.
+* `test_09_package_tracking_reflects_lifecycle`: Live package tracking reflects status changes accurately.
+* `test_10_transaction_rollback_on_failure`: Database rollback test verifying no partial state commits occur on failure.
+* `test_11_reject_double_booking_active_assets`: Trigger blocks concurrent double-booking of package/pilot/drone.
+* `test_12_pilot_duty_toggle_guard`: Pilot cannot be switched to `OFF_DUTY` while assigned to an active mission.
+
+---
+
+## 10. Common Database Connection & Initialization Errors
 
 | Error Symptom | Common Root Cause | Resolution |
 | :--- | :--- | :--- |

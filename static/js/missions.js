@@ -120,14 +120,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 let statusBadgeClass = 'badge-pending';
                 if (m.MISSION_STATUS === 'ONGOING') statusBadgeClass = 'badge-ongoing';
                 else if (m.MISSION_STATUS === 'OVER') statusBadgeClass = 'badge-completed';
+                else if (m.MISSION_STATUS === 'CANCELLED') statusBadgeClass = 'alert-error';
 
                 let actionBtn = '';
                 if (m.MISSION_STATUS === 'IDLE') {
-                    actionBtn = `<button class="btn-sm btn-action btn-start-mission" data-id="${m.MISSION_ID}">Start Mission</button>`;
+                    actionBtn = `
+                        <button class="btn-sm btn-action btn-start-mission" data-id="${m.MISSION_ID}">Start</button>
+                        <button class="btn-sm btn-action btn-secondary-action btn-cancel-mission" data-id="${m.MISSION_ID}" style="margin-left: 0.35rem;">Cancel</button>
+                    `;
                 } else if (m.MISSION_STATUS === 'ONGOING') {
-                    actionBtn = `<button class="btn-sm btn-action btn-secondary-action btn-complete-mission" data-id="${m.MISSION_ID}">Complete Mission</button>`;
+                    actionBtn = `<button class="btn-sm btn-action btn-secondary-action btn-complete-mission" data-id="${m.MISSION_ID}">Complete</button>`;
+                } else if (m.MISSION_STATUS === 'CANCELLED') {
+                    actionBtn = `<span style="color: #991b1b; font-size: 0.85rem; font-weight: 600;">Cancelled</span>`;
                 } else {
-                    actionBtn = `<span style="color: #64748b; font-size: 0.85rem;">Completed</span>`;
+                    actionBtn = `<span style="color: #065f46; font-size: 0.85rem; font-weight: 600;">Completed</span>`;
                 }
 
                 const pilotDisplay = m.PILOT_NAME ? `${m.PILOT_NAME} (#${m.PILOT_ID})` : `#${m.PILOT_ID}`;
@@ -156,6 +162,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             document.querySelectorAll('.btn-complete-mission').forEach(btn => {
                 btn.addEventListener('click', () => handleCompleteMission(btn.getAttribute('data-id')));
+            });
+
+            document.querySelectorAll('.btn-cancel-mission').forEach(btn => {
+                btn.addEventListener('click', () => handleCancelMission(btn.getAttribute('data-id')));
             });
 
         } catch (err) {
@@ -260,6 +270,32 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             console.error('Error completing mission:', err);
             showAlert('Network or server error while completing mission.');
+        }
+    }
+
+    async function handleCancelMission(missionId) {
+        hideAlert();
+        if (!confirm(`Are you sure you want to cancel Mission #${missionId}? The package and pilot will be released.`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/missions/${missionId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                showAlert(data.message, 'success');
+                loadOptions();
+                loadMissions();
+            } else {
+                showAlert(data.message || 'Failed to cancel mission.');
+            }
+        } catch (err) {
+            console.error('Error cancelling mission:', err);
+            showAlert('Network or server error while cancelling mission.');
         }
     }
 
