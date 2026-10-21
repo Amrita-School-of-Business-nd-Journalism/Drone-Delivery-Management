@@ -35,6 +35,9 @@
             <div class="actions-buttons">
                 <a href="{{ url_for('vendor_missions_page') }}" class="btn-action">Mission Management</a>
                 <a href="{{ url_for('vendor_batteries_page') }}" class="btn-action">Batteries & Charging</a>
+                <a href="#drones-section" class="btn-action btn-secondary-action">Manage Fleet</a>
+                <a href="#pilots-section" class="btn-action btn-secondary-action">Pilots Roster</a>
+                <a href="#routes-section" class="btn-action btn-secondary-action">Delivery Corridors</a>
                 <a href="{{ url_for('profile_page') }}" class="btn-action btn-secondary-action">My Profile</a>
             </div>
         </section>
@@ -56,7 +59,7 @@
         </section>
 
         <!-- Vendor Package Activity Table -->
-        <section class="recent-deliveries-section">
+        <section class="recent-deliveries-section" style="margin-bottom: 2.5rem;">
             <h3>Products & Package Requests Associated with Your Business</h3>
             <div class="table-responsive">
                 <table class="data-table">
@@ -75,6 +78,172 @@
                         <tr>
                             <td colspan="7" style="text-align: center; color: #64748b; padding: 1.5rem;">
                                 Loading package inventory...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Drone Fleet Management Section -->
+        <section id="drones-section" class="quick-actions-section" style="margin-bottom: 2.5rem;">
+            <h3>Fleet Management: Drone Inventory</h3>
+            <p style="color: #64748b; margin-bottom: 1.25rem; font-size: 0.95rem;">
+                Register and review drone airframes. Registered drones become instantly selectable in mission dispatch and battery maintenance.
+            </p>
+            
+            <form id="register-drone-form" style="margin-bottom: 1.5rem;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="drone-id-input">Drone ID *</label>
+                        <input type="number" id="drone-id-input" placeholder="e.g. 106" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="drone-payload-input">Payload Capacity (kg) *</label>
+                        <input type="number" id="drone-payload-input" placeholder="e.g. 20" min="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="drone-location-input">Current Base Location *</label>
+                        <input type="text" id="drone-location-input" placeholder="e.g. Warehouse A" maxlength="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="drone-date-input">Purchase Date (Optional)</label>
+                        <input type="date" id="drone-date-input">
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-register-drone" class="btn-primary">Register Drone</button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Drone ID</th>
+                            <th>Payload Cap</th>
+                            <th>Current Location</th>
+                            <th>Purchase Date</th>
+                            <th>Last Delivery / Commissioning</th>
+                        </tr>
+                    </thead>
+                    <tbody id="drones-table-body">
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading drone fleet...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Pilot Roster Management Section -->
+        <section id="pilots-section" class="quick-actions-section" style="margin-bottom: 2.5rem;">
+            <h3>Pilot Personnel: Roster & Duty Controls</h3>
+            <p style="color: #64748b; margin-bottom: 1.25rem; font-size: 0.95rem;">
+                Onboard certified pilots and adjust their duty status between AVAILABLE and OFF_DUTY. (ON_MISSION status is safely locked to active mission operations).
+            </p>
+
+            <form id="register-pilot-form" style="margin-bottom: 1.5rem;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="pilot-name-input">Pilot Full Name *</label>
+                        <input type="text" id="pilot-name-input" placeholder="e.g. Alex Kamal" maxlength="50" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pilot-license-input">License Number *</label>
+                        <input type="text" id="pilot-license-input" placeholder="e.g. LIC-DRN-2001" maxlength="50" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pilot-phone-input">Phone Number (10 Digits) *</label>
+                        <input type="tel" id="pilot-phone-input" placeholder="e.g. 9876543210" pattern="[0-9]{10}" maxlength="10" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="pilot-status-select">Initial Duty Status</label>
+                        <select id="pilot-status-select">
+                            <option value="AVAILABLE">AVAILABLE</option>
+                            <option value="OFF_DUTY">OFF_DUTY</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-register-pilot" class="btn-primary">Add Pilot</button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Pilot ID</th>
+                            <th>Pilot Name</th>
+                            <th>License Number</th>
+                            <th>Phone Number</th>
+                            <th>Duty Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pilots-table-body">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading pilot roster...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Delivery Routes Management Section -->
+        <section id="routes-section" class="quick-actions-section">
+            <h3>Flight Network: Delivery Routes & Corridors</h3>
+            <p style="color: #64748b; margin-bottom: 1.25rem; font-size: 0.95rem;">
+                Define flight corridors between source dispatch hubs and destination delivery zones.
+            </p>
+
+            <form id="register-route-form" style="margin-bottom: 1.5rem;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="route-id-input">Route ID (Optional)</label>
+                        <input type="number" id="route-id-input" placeholder="Auto-computed if blank" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="route-source-input">Source Waypoint *</label>
+                        <input type="text" id="route-source-input" placeholder="e.g. Warehouse A" maxlength="25" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-dest-input">Destination Waypoint *</label>
+                        <input type="text" id="route-dest-input" placeholder="e.g. Zone D" maxlength="25" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-distance-input">Distance (km) *</label>
+                        <input type="number" id="route-distance-input" placeholder="e.g. 18.5" step="0.1" min="0.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-time-input">Est. Time (min) *</label>
+                        <input type="number" id="route-time-input" placeholder="e.g. 30" min="1" required>
+                    </div>
+                    <div class="form-group" style="display: flex; align-items: flex-end;">
+                        <button type="submit" id="btn-register-route" class="btn-primary">Add Route</button>
+                    </div>
+                </div>
+            </form>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Route ID</th>
+                            <th>Flight Corridor (Source &rarr; Destination)</th>
+                            <th>Distance (km)</th>
+                            <th>Est. Flight Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="routes-table-body">
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                Loading delivery routes...
                             </td>
                         </tr>
                     </tbody>

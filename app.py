@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime, date
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -15,6 +16,7 @@ app.secret_key = os.getenv('SECRET_KEY', 'default_fallback_secret_key')
 
 EMAIL_REGEX = re.compile(r'^[A-Za-z0-9_]+@[A-Za-z]+\.[A-Za-z]{2,}$')
 PHONE_REGEX = re.compile(r'^[0-9]{10}$')
+DATE_REGEX = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 # -----------------------------------------------------
 # Authentication & Role Protection Decorators
@@ -861,6 +863,455 @@ def logout():
     if request.is_json or request.path.startswith('/api/'):
         return jsonify({"success": True, "message": "Logged out successfully.", "redirect_url": url_for('home')}), 200
     return redirect(url_for('home'))
+
+# -----------------------------------------------------
+# Operational Master Data APIs: Drones
+# -----------------------------------------------------
+@app.route('/api/drones', methods=['GET'])
+@role_required('VENDOR')
+def api_get_drones():
+    """
+    Retrieves all registered drones from the database.
+    Restricted to VENDOR role.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT DRONE_ID, PAYLOAD_CAP, CURR_LOCATION, PURCHASE_DATE, LAST_DELIVERY 
+            FROM DRONES 
+            ORDER BY DRONE_ID ASC
+        """)
+        drones = cursor.fetchall()
+        for d in drones:
+            d['PURCHASE_DATE'] = str(d['PURCHASE_DATE']) if d.get('PURCHASE_DATE') else None
+            d['LAST_DELIVERY'] = str(d['LAST_DELIVERY']) if d.get('LAST_DELIVERY') else None
+
+        return jsonify({"success": True, "drones": drones}), 200
+    except MySQLError as err:
+        print(f"MySQL Error fetching drones: {err}")
+        return jsonify({"success": False, "message": "Database error fetching drones."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/drones', methods=['POST'])
+@role_required('VENDOR')
+def api_create_drone():
+    """
+    Registers a new drone airframe in the fleet.
+    - DRONE_ID must be a unique positive integer.
+    - PAYLOAD_CAP must be a positive integer (in kg).
+    - CURR_LOCATION must be non-empty (max 100 characters).
+    - PURCHASE_DATE must be a valid date YYYY-MM-DD (defaults to CURDATE()).
+    - LAST_DELIVERY is initialized to NOW() (or purchase timestamp) to satisfy the schema's
+      NOT NULL constraint on DRONES.LAST_DELIVERY without fabricating false delivery history.
+      It represents the baseline commissioning timestamp until the first delivery is completed.
+    Restricted to VENDOR role.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    raw_drone_id = data.get('drone_id')
+    raw_payload_cap = data.get('payload_cap')
+    curr_location = (data.get('curr_location') or '').strip()
+    purchase_date_str = (data.get('purchase_date') or '').strip()
+
+    try:
+        drone_id = int(raw_drone_id)
+        payload_cap = int(raw_payload_cap)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Drone ID and Payload Capacity must be valid integers."}), 400
+
+    if drone_id <= 0:
+        return jsonify({"success": False, "message": "Drone ID must be a positive integer."}), 400
+    if payload_cap <= 0:
+        return jsonify({"success": False, "message": "Payload Capacity must be a positive integer (kg)."}), 400
+    if not curr_location:
+        return jsonify({"success": False, "message": "Current Location is required."}), 400
+    if len(curr_location) > 100:
+        return jsonify({"success": False, "message": "Current Location must not exceed 100 characters."}), 400
+
+    valid_purchase_date = None
+    if purchase_date_str:
+        if not DATE_REGEX.match(purchase_date_str):
+            return jsonify({"success": False, "message": "Purchase Date must follow YYYY-MM-DD format."}), 400
+        try:
+            valid_purchase_date = datetime.strptime(purchase_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid calendar date for Purchase Date."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        # Check for existing duplicate Drone ID
+        cursor.execute("SELECT DRONE_ID FROM DRONES WHERE DRONE_ID = %s", (drone_id,))
+        if cursor.fetchone():
+            return jsonify({"success": False, "message": f"Drone ID {drone_id} is already registered in the database."}), 400
+
+        if valid_purchase_date:
+            insert_query = """
+                INSERT INTO DRONES (DRONE_ID, PAYLOAD_CAP, CURR_LOCATION, PURCHASE_DATE, LAST_DELIVERY)
+                VALUES (%s, %s, %s, %s, NOW())
+            """
+            cursor.execute(insert_query, (drone_id, payload_cap, curr_location, valid_purchase_date))
+        else:
+            insert_query = """
+                INSERT INTO DRONES (DRONE_ID, PAYLOAD_CAP, CURR_LOCATION, PURCHASE_DATE, LAST_DELIVERY)
+                VALUES (%s, %s, %s, CURDATE(), NOW())
+            """
+            cursor.execute(insert_query, (drone_id, payload_cap, curr_location))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True, 
+            "message": f"Drone #{drone_id} registered successfully!",
+            "drone": {
+                "drone_id": drone_id,
+                "payload_cap": payload_cap,
+                "curr_location": curr_location,
+                "purchase_date": str(valid_purchase_date) if valid_purchase_date else str(date.today())
+            }
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": f"Drone ID {drone_id} already exists."}), 400
+        print(f"MySQL Error creating drone: {err}")
+        return jsonify({"success": False, "message": "Database error creating drone."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+# -----------------------------------------------------
+# Operational Master Data APIs: Pilots
+# -----------------------------------------------------
+@app.route('/api/pilots', methods=['GET'])
+@role_required('VENDOR')
+def api_get_pilots():
+    """
+    Retrieves all pilot records from the database.
+    Restricted to VENDOR role.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT PILOT_ID, PILOT_NAME, LICENSE_NUMBER, PHONE_NO, STATUS 
+            FROM PILOTS 
+            ORDER BY PILOT_ID ASC
+        """)
+        pilots = cursor.fetchall()
+        return jsonify({"success": True, "pilots": pilots}), 200
+    except MySQLError as err:
+        print(f"MySQL Error fetching pilots: {err}")
+        return jsonify({"success": False, "message": "Database error fetching pilots."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/pilots', methods=['POST'])
+@role_required('VENDOR')
+def api_create_pilot():
+    """
+    Registers a new certified pilot using auto-increment PILOT_ID.
+    - PILOT_NAME max 50 chars.
+    - LICENSE_NUMBER unique, max 50 chars.
+    - PHONE_NO exactly 10 digits (matching DDL CHECK regex ^[0-9]{10}$).
+    - STATUS must be 'AVAILABLE' or 'OFF_DUTY' (defaults to 'AVAILABLE').
+    Restricted to VENDOR role.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    pilot_name = (data.get('pilot_name') or '').strip()
+    license_number = (data.get('license_number') or '').strip().upper()
+    phone_no = (data.get('phone_no') or '').strip()
+    status = (data.get('status') or 'AVAILABLE').strip().upper()
+
+    if not pilot_name or not license_number or not phone_no:
+        return jsonify({"success": False, "message": "Pilot name, license number, and phone number are required."}), 400
+
+    if len(pilot_name) > 50:
+        return jsonify({"success": False, "message": "Pilot name must not exceed 50 characters."}), 400
+    if len(license_number) > 50:
+        return jsonify({"success": False, "message": "License number must not exceed 50 characters."}), 400
+    if not PHONE_REGEX.match(phone_no):
+        return jsonify({"success": False, "message": "Phone number must be exactly 10 digits."}), 400
+
+    if status not in ['AVAILABLE', 'OFF_DUTY']:
+        return jsonify({"success": False, "message": "Initial pilot status must be 'AVAILABLE' or 'OFF_DUTY'."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        # Check unique license number and phone number
+        cursor.execute("SELECT PILOT_ID, LICENSE_NUMBER, PHONE_NO FROM PILOTS WHERE LICENSE_NUMBER = %s OR PHONE_NO = %s", (license_number, phone_no))
+        existing = cursor.fetchall()
+        for p in existing:
+            if p['LICENSE_NUMBER'] == license_number:
+                return jsonify({"success": False, "message": f"License number '{license_number}' is already registered."}), 400
+            if p['PHONE_NO'] == phone_no:
+                return jsonify({"success": False, "message": f"Phone number '{phone_no}' is already registered to another pilot."}), 400
+
+        insert_query = """
+            INSERT INTO PILOTS (PILOT_NAME, LICENSE_NUMBER, PHONE_NO, STATUS)
+            VALUES (%s, %s, %s, %s)
+        """
+        cursor.execute(insert_query, (pilot_name, license_number, phone_no, status))
+        conn.commit()
+        new_pilot_id = cursor.lastrowid
+
+        return jsonify({
+            "success": True, 
+            "message": f"Pilot '{pilot_name}' registered successfully!",
+            "pilot_id": new_pilot_id,
+            "pilot": {
+                "pilot_id": new_pilot_id,
+                "pilot_name": pilot_name,
+                "license_number": license_number,
+                "phone_no": phone_no,
+                "status": status
+            }
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": "License number or phone number already exists."}), 400
+        print(f"MySQL Error creating pilot: {err}")
+        return jsonify({"success": False, "message": "Database error creating pilot."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/pilots/<int:pilot_id>/status', methods=['PUT'])
+@role_required('VENDOR')
+def api_update_pilot_status(pilot_id):
+    """
+    Updates a pilot's duty status between 'AVAILABLE' and 'OFF_DUTY'.
+    - Manual transition to 'ON_MISSION' is forbidden.
+    - Pilots currently on mission or assigned to active/pending missions cannot be set to 'OFF_DUTY'.
+    Restricted to VENDOR role.
+    """
+    data = request.get_json()
+    if not data or 'status' not in data:
+        return jsonify({"success": False, "message": "Status field is required."}), 400
+
+    new_status = str(data.get('status')).strip().upper()
+    if new_status not in ['AVAILABLE', 'OFF_DUTY']:
+        return jsonify({
+            "success": False, 
+            "message": "Status can only be toggled between 'AVAILABLE' and 'OFF_DUTY'. 'ON_MISSION' is managed exclusively by mission dispatch."
+        }), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        conn.start_transaction()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT PILOT_ID, PILOT_NAME, STATUS FROM PILOTS WHERE PILOT_ID = %s", (pilot_id,))
+        pilot = cursor.fetchone()
+        if not pilot:
+            conn.rollback()
+            return jsonify({"success": False, "message": f"Pilot #{pilot_id} not found."}), 404
+
+        current_status = pilot['STATUS']
+        if current_status == 'ON_MISSION':
+            conn.rollback()
+            return jsonify({
+                "success": False, 
+                "message": f"Cannot alter duty status of Pilot #{pilot_id} while currently flying an active mission (ON_MISSION)."
+            }), 400
+
+        # If switching to OFF_DUTY, verify pilot is not assigned to any active (IDLE or ONGOING) mission
+        if new_status == 'OFF_DUTY':
+            cursor.execute("""
+                SELECT MISSION_ID, MISSION_STATUS 
+                FROM MISSIONS 
+                WHERE PILOT_ID = %s AND MISSION_STATUS IN ('IDLE', 'ONGOING')
+            """, (pilot_id,))
+            active_mission = cursor.fetchone()
+            if active_mission:
+                conn.rollback()
+                return jsonify({
+                    "success": False, 
+                    "message": f"Cannot set Pilot #{pilot_id} to OFF_DUTY while assigned to active Mission #{active_mission['MISSION_ID']} ({active_mission['MISSION_STATUS']})."
+                }), 400
+
+        cursor.execute("UPDATE PILOTS SET STATUS = %s WHERE PILOT_ID = %s", (new_status, pilot_id))
+        conn.commit()
+
+        return jsonify({
+            "success": True, 
+            "message": f"Pilot #{pilot_id} ({pilot['PILOT_NAME']}) status updated from {current_status} to {new_status}."
+        }), 200
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        print(f"MySQL Error updating pilot status: {err}")
+        return jsonify({"success": False, "message": "Database error updating pilot status."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+# -----------------------------------------------------
+# Operational Master Data APIs: Routes
+# -----------------------------------------------------
+@app.route('/api/routes', methods=['GET'])
+@role_required('VENDOR')
+def api_get_routes():
+    """
+    Retrieves all delivery route corridors from the database.
+    Restricted to VENDOR role.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT ROUTE_ID, SOURCE, DESTINATION, DISTANCE, ESTIMATED_TIME 
+            FROM ROUTES 
+            ORDER BY ROUTE_ID ASC
+        """)
+        routes = cursor.fetchall()
+        for r in routes:
+            r['DISTANCE'] = float(r['DISTANCE']) if r.get('DISTANCE') is not None else None
+
+        return jsonify({"success": True, "routes": routes}), 200
+    except MySQLError as err:
+        print(f"MySQL Error fetching routes: {err}")
+        return jsonify({"success": False, "message": "Database error fetching routes."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
+@app.route('/api/routes', methods=['POST'])
+@role_required('VENDOR')
+def api_create_route():
+    """
+    Registers a new delivery corridor in the database.
+    - ROUTE_ID must be a positive integer (auto-computed if omitted).
+    - SOURCE and DESTINATION must be non-empty (max 25 characters).
+    - DISTANCE must be a positive decimal/float (in km).
+    - ESTIMATED_TIME must be a positive integer (in minutes).
+    Restricted to VENDOR role.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid request payload."}), 400
+
+    raw_route_id = data.get('route_id')
+    source = (data.get('source') or '').strip()
+    destination = (data.get('destination') or '').strip()
+    raw_distance = data.get('distance')
+    raw_time = data.get('estimated_time')
+
+    if not source or not destination:
+        return jsonify({"success": False, "message": "Source and Destination waypoints are required."}), 400
+
+    if len(source) > 25:
+        return jsonify({"success": False, "message": "Source waypoint must not exceed 25 characters."}), 400
+    if len(destination) > 25:
+        return jsonify({"success": False, "message": "Destination waypoint must not exceed 25 characters."}), 400
+
+    try:
+        distance = float(raw_distance)
+        estimated_time = int(raw_time)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "Distance must be a valid number and Estimated Time must be a valid integer."}), 400
+
+    if distance <= 0:
+        return jsonify({"success": False, "message": "Distance must be greater than zero."}), 400
+    if estimated_time <= 0:
+        return jsonify({"success": False, "message": "Estimated Time must be greater than zero."}), 400
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection(use_database=True)
+        if not conn or not conn.is_connected():
+            return jsonify({"success": False, "message": "Database connection failed."}), 500
+
+        cursor = conn.cursor(dictionary=True)
+
+        if raw_route_id is not None and str(raw_route_id).strip() != "":
+            try:
+                target_route_id = int(raw_route_id)
+                if target_route_id <= 0:
+                    return jsonify({"success": False, "message": "Route ID must be a positive integer."}), 400
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "message": "Route ID must be a valid integer."}), 400
+
+            cursor.execute("SELECT ROUTE_ID FROM ROUTES WHERE ROUTE_ID = %s", (target_route_id,))
+            if cursor.fetchone():
+                return jsonify({"success": False, "message": f"Route ID {target_route_id} already exists."}), 400
+        else:
+            cursor.execute("SELECT COALESCE(MAX(ROUTE_ID), 0) + 1 AS next_id FROM ROUTES")
+            target_route_id = cursor.fetchone()['next_id']
+
+        insert_query = """
+            INSERT INTO ROUTES (ROUTE_ID, SOURCE, DESTINATION, DISTANCE, ESTIMATED_TIME)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(insert_query, (target_route_id, source, destination, distance, estimated_time))
+        conn.commit()
+
+        return jsonify({
+            "success": True, 
+            "message": f"Route #{target_route_id} ({source} -> {destination}) registered successfully!",
+            "route_id": target_route_id,
+            "route": {
+                "route_id": target_route_id,
+                "source": source,
+                "destination": destination,
+                "distance": distance,
+                "estimated_time": estimated_time
+            }
+        }), 201
+
+    except MySQLError as err:
+        if conn:
+            conn.rollback()
+        if err.errno == 1062:
+            return jsonify({"success": False, "message": f"Route ID {target_route_id} already exists."}), 400
+        print(f"MySQL Error creating route: {err}")
+        return jsonify({"success": False, "message": "Database error creating route."}), 500
+    finally:
+        close_db_connection(conn, cursor)
+
 
 # -----------------------------------------------------
 # Mission Management API Endpoints
