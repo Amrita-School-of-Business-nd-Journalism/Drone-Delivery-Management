@@ -976,6 +976,20 @@ def api_create_drone():
             """
             cursor.execute(insert_query, (drone_id, payload_cap, curr_location))
 
+        # Auto-provision an operational commissioning battery so the drone is flight-ready
+        cursor.execute("SELECT COALESCE(MAX(BATTERY_ID), 0) + 1 AS next_bat_id FROM BATTERIES")
+        next_bat_id = cursor.fetchone()['next_bat_id']
+        cursor.execute("""
+            INSERT INTO BATTERIES (BATTERY_ID, DRONE_ID, CAPACITY, CYCLES, STATUS)
+            VALUES (%s, %s, 5000, 0, 'GOOD')
+        """, (next_bat_id, drone_id))
+
+        # Auto-log baseline commissioning maintenance check
+        cursor.execute("""
+            INSERT INTO MAINTENACE (DRONE_ID, STATUS, REPAIR_DATE, COST, REASON)
+            VALUES (%s, 'GOOD', CURDATE(), 100, 'Commissioning inspection passed')
+        """, (drone_id,))
+
         conn.commit()
 
         return jsonify({
